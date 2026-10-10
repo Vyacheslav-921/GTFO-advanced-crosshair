@@ -18,8 +18,8 @@ namespace GtfoTestmod;
 public class Plugin : BasePlugin
 {
     // Unique id used by BepInEx + Harmony (must stay stable across versions).
-    public const string PluginGuid = "V-921.GTFO-better-crosshair";
-    public const string PluginName = "GTFO-better-crosshair"; 
+    public const string PluginGuid = "levi.GTFO-time-ui";
+    public const string PluginName = "GTFO-time-ui"; 
     public const string PluginVersion = "1.0.0";
 
     /// <summary>Singleton so patches / MonoBehaviours can log through this plugin instance.</summary>
@@ -38,7 +38,7 @@ public class Plugin : BasePlugin
         // AddComponent attaches a Unity MonoBehaviour to the plugin's GameObject.
         // ClockOverlay.Update will then run every frame and bind to PUI_Watermark when ready.
         // (See ClockOverlay.cs — it does NOT Harmony-patch watermark methods.)
-       // AddComponent<ClockOverlay>();
+        AddComponent<ClockOverlay>();
         Log.LogInfo("Clock overlay ready (awaits watermark bind).");
 
         // Harmony.PatchAll() scans this assembly for [HarmonyPatch] classes and applies them.
