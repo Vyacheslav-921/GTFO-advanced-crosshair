@@ -58,12 +58,13 @@ internal class CenterDotOverlay : MonoBehaviour
     public static ConfigEntry<int> OutlineSize { get; private set; } = null!;
     public static ConfigEntry<float> OutlineOpacity { get; private set; } = null!;
     public static ConfigEntry<float> OutlineSpacing { get; private set; } = null!;
-    public static ConfigEntry<bool> MeleeChargeFeedback { get; private set; } = null!;
+    public static ConfigEntry<bool> HintEnabled { get; private set; } = null!;
     public static ConfigEntry<bool> HintShowAlways { get; private set; } = null!;
-    public static ConfigEntry<string> MeleeChargeShape { get; private set; } = null!;
-    public static ConfigEntry<string> MeleeChargeHintColorHex { get; private set; } = null!;
-    public static ConfigEntry<int> MeleeChargeRingSize { get; private set; } = null!;
-    public static ConfigEntry<float> MeleeChargeRingOpacity { get; private set; } = null!;
+    public static ConfigEntry<string> HintShape { get; private set; } = null!;
+    public static ConfigEntry<string> HintColorHex { get; private set; } = null!;
+    public static ConfigEntry<string> HintAutoAttackColorHex { get; private set; } = null!;
+    public static ConfigEntry<int> HintSize { get; private set; } = null!;
+    public static ConfigEntry<float> HintOpacity { get; private set; } = null!;
 
     /// <summary>
     /// The crosshair layer's vertical mapping does not match view space.
@@ -74,6 +75,7 @@ internal class CenterDotOverlay : MonoBehaviour
     private const float ScopeFovMargin = 2f;
     private const float MinimumCenterPatternSize = 9f;
     private const float MinimumOutlinePatternSize = 12f;
+    private const float HintReadyPadding = 2f;
 
     internal static CenterDotOverlay? Current { get; private set; }
 
@@ -84,16 +86,16 @@ internal class CenterDotOverlay : MonoBehaviour
     private UI_Sprite? _halo;
     private UI_Sprite? _outline;
     private UI_Sprite? _dot;
-    private UI_Sprite? _chargeRing;
+    private UI_Sprite? _hint;
     private Sprite? _solidDotSprite;
     private Sprite? _crosshairDotsSprite;
     private Sprite? _crosshairArcsSprite;
     private Sprite? _crosshairLinesSprite;
     private Sprite? _crosshairCircleSprite;
-    private Sprite? _chargeDotsSprite;
-    private Sprite? _chargeSemicirclesSprite;
-    private Sprite? _chargeLinesSprite;
-    private Sprite? _chargeCircleSprite;
+    private Sprite? _hintDotsSprite;
+    private Sprite? _hintArcsSprite;
+    private Sprite? _hintLinesSprite;
+    private Sprite? _hintCircleSprite;
     private float _nextCreateAttempt;
     private string? _appliedHex;
     private int _appliedSize = -1;
@@ -109,7 +111,7 @@ internal class CenterDotOverlay : MonoBehaviour
     private bool _recoilErrorLogged;
     private float _hipLookFov;
     private bool _hasHipLookFov;
-    private bool _chargeCueActive;
+    private bool _hintChargeActive;
     private IntPtr _chargeStatePtr;
     private bool _chargeErrorLogged;
 
@@ -120,25 +122,25 @@ internal class CenterDotOverlay : MonoBehaviour
     public static void Bind(ConfigFile config)
     {
         Enabled = config.Bind(
-            "Center",
+            "1 - Center",
             "Enabled",
             true,
             "Draw the crosshair while aiming in a level.");
 
         HideWhenScoped = config.Bind(
-            "Center",
+            "1 - Center",
             "Hide when scoped",
             true,
             "Hide the crosshair while aiming through a magnified scope.");
 
         FollowRecoil = config.Bind(
-            "Center",
+            "1 - Center",
             "Follow recoil",
             true,
             "Move the crosshair center with weapon recoil that does not follow the camera. Shotguns stay centered.");
 
         Shape = config.Bind(
-            "Center",
+            "1 - Center",
             "Shape",
             "Dot",
             new ConfigDescription(
@@ -146,13 +148,13 @@ internal class CenterDotOverlay : MonoBehaviour
                 new AcceptableValueList<string>("Dot", "Two dots", "Arcs", "Circle", "Lines")));
 
         ColorHex = config.Bind(
-            "Center",
+            "1 - Center",
             "Color",
             "5eb18e",
             "Dot color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         Size = config.Bind(
-            "Center",
+            "1 - Center",
             "Size",
             3,
             new ConfigDescription(
@@ -160,7 +162,7 @@ internal class CenterDotOverlay : MonoBehaviour
                 new AcceptableValueRange<int>(1, 32)));
 
         Opacity = config.Bind(
-            "Center",
+            "1 - Center",
             "Opacity",
             0.9f,
             new ConfigDescription(
@@ -168,7 +170,7 @@ internal class CenterDotOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0f, 1f)));
 
         OutlineShape = config.Bind(
-            "Outline",
+            "2 - Outline",
             "Shape",
             "Dot",
             new ConfigDescription(
@@ -176,13 +178,13 @@ internal class CenterDotOverlay : MonoBehaviour
                 new AcceptableValueList<string>("Dot", "Two dots", "Arcs", "Circle", "Lines")));
 
         OutlineColorHex = config.Bind(
-            "Outline",
+            "2 - Outline",
             "Color",
             "b00a22",
             "Outer ring color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         OutlineSize = config.Bind(
-            "Outline",
+            "2 - Outline",
             "Size",
             9,
             new ConfigDescription(
@@ -190,7 +192,7 @@ internal class CenterDotOverlay : MonoBehaviour
                 new AcceptableValueRange<int>(1, 64)));
 
         OutlineOpacity = config.Bind(
-            "Outline",
+            "2 - Outline",
             "Opacity",
             0.8f,
             new ConfigDescription(
@@ -198,49 +200,55 @@ internal class CenterDotOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0f, 1f)));
 
         OutlineSpacing = config.Bind(
-            "Outline",
+            "2 - Outline",
             "Spacing",
             3f,
             new ConfigDescription(
                 "Radial distance from the center shape. Applies to every outline shape except Dot.",
                 new AcceptableValueRange<float>(0f, 32f)));
 
-        MeleeChargeFeedback = config.Bind(
-            "Hint",
+        HintEnabled = config.Bind(
+            "3 - Hint",
             "Enabled",
             true,
             "Show the shrinking melee charge hint.");
 
         HintShowAlways = config.Bind(
-            "Hint",
+            "3 - Hint",
             "Show always",
             false,
             "Keep the hint visible while no melee attack is charging.");
 
-        MeleeChargeShape = config.Bind(
-            "Hint",
+        HintShape = config.Bind(
+            "3 - Hint",
             "Shape",
             "Circle",
             new ConfigDescription(
                 "Melee charge hint shape.",
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
 
-        MeleeChargeHintColorHex = config.Bind(
-            "Hint",
+        HintColorHex = config.Bind(
+            "3 - Hint",
             "Color",
             "e5c369",
             "Melee charge hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
-        MeleeChargeRingSize = config.Bind(
-            "Hint",
+        HintAutoAttackColorHex = config.Bind(
+            "3 - Hint",
+            "Auto attack color",
+            "ffffff",
+            "Hint color as an automatic melee attack approaches, as RRGGBB or RRGGBBAA.");
+
+        HintSize = config.Bind(
+            "3 - Hint",
             "Size",
             24,
             new ConfigDescription(
                 "Starting diameter of the melee charge hint, in HUD units.",
                 new AcceptableValueRange<int>(8, 64)));
 
-        MeleeChargeRingOpacity = config.Bind(
-            "Hint",
+        HintOpacity = config.Bind(
+            "3 - Hint",
             "Opacity",
             0.9f,
             new ConfigDescription(
@@ -295,9 +303,9 @@ internal class CenterDotOverlay : MonoBehaviour
             ApplyRecoil();
             ApplyMeleeChargeCue();
         }
-        else if (_chargeCueActive)
+        else if (_hintChargeActive)
         {
-            EndChargeCue();
+            EndHintCharge();
         }
     }
 
@@ -626,10 +634,10 @@ internal class CenterDotOverlay : MonoBehaviour
             _crosshairArcsSprite = ShapeSprite(ReticleShape.Arcs, true);
             _crosshairLinesSprite = ShapeSprite(ReticleShape.Lines, true);
             _crosshairCircleSprite = ShapeSprite(ReticleShape.Circle, true);
-            _chargeDotsSprite = ShapeSprite(ReticleShape.TwoDots, false);
-            _chargeSemicirclesSprite = ShapeSprite(ReticleShape.Arcs, false);
-            _chargeLinesSprite = ShapeSprite(ReticleShape.Lines, false);
-            _chargeCircleSprite = ShapeSprite(ReticleShape.Circle, false);
+            _hintDotsSprite = ShapeSprite(ReticleShape.TwoDots, false);
+            _hintArcsSprite = ShapeSprite(ReticleShape.Arcs, false);
+            _hintLinesSprite = ShapeSprite(ReticleShape.Lines, false);
+            _hintCircleSprite = ShapeSprite(ReticleShape.Circle, false);
 
             root = new GameObject("GTFO Center Aim Dot");
             var rect = root.AddComponent<RectTransform>();
@@ -644,17 +652,17 @@ internal class CenterDotOverlay : MonoBehaviour
             _halo = CreateSprite(rect, sprite, "Halo", layer, reference);
             _outline = CreateSprite(rect, sprite, "Outline", layer, reference);
             _dot = CreateSprite(rect, sprite, "Dot", layer, reference);
-            _chargeRing = CreateSprite(rect, _chargeCircleSprite!, "Melee Charge Hint", layer, reference);
+            _hint = CreateSprite(rect, _hintCircleSprite!, "Melee Charge Hint", layer, reference);
             if (reference != null
                 && _dot.m_sprite != null
                 && _outline.m_sprite != null
                 && _halo.m_sprite != null
-                && _chargeRing.m_sprite != null)
+                && _hint.m_sprite != null)
             {
                 _halo.m_sprite.sortingOrder = reference.sortingOrder + 10;
                 _outline.m_sprite.sortingOrder = reference.sortingOrder + 11;
                 _dot.m_sprite.sortingOrder = reference.sortingOrder + 12;
-                _chargeRing.m_sprite.sortingOrder = reference.sortingOrder + 13;
+                _hint.m_sprite.sortingOrder = reference.sortingOrder + 13;
             }
 
             _root = root;
@@ -669,7 +677,7 @@ internal class CenterDotOverlay : MonoBehaviour
             _appliedShape = null;
             _appliedOutlineShape = null;
             ApplyStyle();
-            HideChargeRing();
+            HideHint();
             _root.SetActive(false);
             Plugin.Instance.Log.LogInfo($"Center aim dot attached to HUD group '{parent.name}'.");
         }
@@ -680,16 +688,16 @@ internal class CenterDotOverlay : MonoBehaviour
             _halo = null;
             _outline = null;
             _dot = null;
-            _chargeRing = null;
+            _hint = null;
             _solidDotSprite = null;
             _crosshairDotsSprite = null;
             _crosshairArcsSprite = null;
             _crosshairLinesSprite = null;
             _crosshairCircleSprite = null;
-            _chargeDotsSprite = null;
-            _chargeSemicirclesSprite = null;
-            _chargeLinesSprite = null;
-            _chargeCircleSprite = null;
+            _hintDotsSprite = null;
+            _hintArcsSprite = null;
+            _hintLinesSprite = null;
+            _hintCircleSprite = null;
             _parentPtr = IntPtr.Zero;
             if (root != null)
                 Destroy(root);
@@ -709,16 +717,16 @@ internal class CenterDotOverlay : MonoBehaviour
         _halo = null;
         _outline = null;
         _dot = null;
-        _chargeRing = null;
+        _hint = null;
         _solidDotSprite = null;
         _crosshairDotsSprite = null;
         _crosshairArcsSprite = null;
         _crosshairLinesSprite = null;
         _crosshairCircleSprite = null;
-        _chargeDotsSprite = null;
-        _chargeSemicirclesSprite = null;
-        _chargeLinesSprite = null;
-        _chargeCircleSprite = null;
+        _hintDotsSprite = null;
+        _hintArcsSprite = null;
+        _hintLinesSprite = null;
+        _hintCircleSprite = null;
         _parentPtr = IntPtr.Zero;
         _appliedHex = null;
         _appliedSize = -1;
@@ -729,7 +737,7 @@ internal class CenterDotOverlay : MonoBehaviour
         _appliedOutlineSpacing = -1f;
         _appliedShape = null;
         _appliedOutlineShape = null;
-        _chargeCueActive = false;
+        _hintChargeActive = false;
         _chargeStatePtr = IntPtr.Zero;
     }
 
@@ -1012,66 +1020,68 @@ internal class CenterDotOverlay : MonoBehaviour
     /// </summary>
     private void ApplyMeleeChargeCue()
     {
-        if (!MeleeChargeFeedback.Value)
+        if (!HintEnabled.Value)
         {
-            if (_chargeCueActive)
-                EndChargeCue();
+            if (_hintChargeActive)
+                EndHintCharge();
             else
-                HideChargeRing();
+                HideHint();
             return;
         }
 
         if (!TryGetMeleeCharge(out var progress, out var autoStrikeWarningProgress, out var statePtr))
         {
-            if (_chargeCueActive)
-                EndChargeCue();
+            if (_hintChargeActive)
+                EndHintCharge();
 
             if (HintShowAlways.Value)
                 ShowHintAtOriginalSize();
             else
-                HideChargeRing();
+                HideHint();
             return;
         }
 
-        var chargeJustStarted = !_chargeCueActive || statePtr != _chargeStatePtr;
+        var chargeJustStarted = !_hintChargeActive || statePtr != _chargeStatePtr;
         if (chargeJustStarted)
         {
-            _chargeCueActive = true;
+            _hintChargeActive = true;
             _chargeStatePtr = statePtr;
         }
 
         var crosshairDiameter = CurrentCrosshairDiameter();
         var targetSize = HintOriginalSize(crosshairDiameter);
+        var readySize = crosshairDiameter + HintReadyPadding;
         var diameter = chargeJustStarted
             ? targetSize
-            : Mathf.Lerp(targetSize, crosshairDiameter, progress);
-        var color = ParseColor(MeleeChargeHintColorHex.Value, new Color(1f, 0.05f, 0.08f, 1f));
-        color.a *= Mathf.Clamp01(MeleeChargeRingOpacity.Value);
-        var renderer = _chargeRing?.m_sprite;
+            : Mathf.Lerp(targetSize, readySize, progress);
+        var color = ConfiguredHintColor();
+        var renderer = _hint?.m_sprite;
         if (renderer != null)
-            renderer.sprite = SelectedChargeHintSprite();
+            renderer.sprite = SelectedHintSprite();
         if (autoStrikeWarningProgress > 0f)
         {
-            ReadConfiguredColors(out var halo, out var ring, out var dot);
             var easedWarning = autoStrikeWarningProgress * autoStrikeWarningProgress;
-            PaintSprites(
-                Color.Lerp(halo, InvertAndBrighten(halo), easedWarning),
-                Color.Lerp(ring, InvertAndBrighten(ring), easedWarning),
-                Color.Lerp(dot, InvertAndBrighten(dot), easedWarning));
-            color = Color.Lerp(color, InvertAndBrighten(color), easedWarning);
+            var autoAttackColor = ParseColor(HintAutoAttackColorHex.Value, Color.white);
+            autoAttackColor.a *= Mathf.Clamp01(HintOpacity.Value);
+            color = Color.Lerp(color, autoAttackColor, easedWarning);
         }
-        SetSprite(_chargeRing!, color, diameter);
+        SetSprite(_hint!, color, diameter);
     }
 
     private void ShowHintAtOriginalSize()
     {
-        var renderer = _chargeRing?.m_sprite;
+        var renderer = _hint?.m_sprite;
         if (renderer != null)
-            renderer.sprite = SelectedChargeHintSprite();
+            renderer.sprite = SelectedHintSprite();
 
-        var color = ParseColor(MeleeChargeHintColorHex.Value, new Color(1f, 0.05f, 0.08f, 1f));
-        color.a *= Mathf.Clamp01(MeleeChargeRingOpacity.Value);
-        SetSprite(_chargeRing!, color, HintOriginalSize(CurrentCrosshairDiameter()));
+        SetSprite(_hint!, ConfiguredHintColor(), HintOriginalSize(CurrentCrosshairDiameter()));
+    }
+
+    private static Color ConfiguredHintColor()
+    {
+        var color = ParseColor(HintColorHex.Value, new Color(1f, 0.05f, 0.08f, 1f));
+        color.a *= Mathf.Clamp01(HintOpacity.Value);
+        return color;
     }
 
     private float CurrentCrosshairDiameter()
@@ -1090,18 +1100,18 @@ internal class CenterDotOverlay : MonoBehaviour
     private static float HintOriginalSize(float crosshairDiameter)
     {
         return Mathf.Max(
-            Mathf.Clamp(MeleeChargeRingSize.Value, 8, 64),
-            crosshairDiameter + 1f);
+            Mathf.Clamp(HintSize.Value, 8, 64),
+            crosshairDiameter + HintReadyPadding);
     }
 
-    private Sprite? SelectedChargeHintSprite()
+    private Sprite? SelectedHintSprite()
     {
-        return ParseShape(MeleeChargeShape.Value) switch
+        return ParseShape(HintShape.Value) switch
         {
-            ReticleShape.TwoDots => _chargeDotsSprite,
-            ReticleShape.Arcs => _chargeSemicirclesSprite,
-            ReticleShape.Lines => _chargeLinesSprite,
-            _ => _chargeCircleSprite
+            ReticleShape.TwoDots => _hintDotsSprite,
+            ReticleShape.Arcs => _hintArcsSprite,
+            ReticleShape.Lines => _hintLinesSprite,
+            _ => _hintCircleSprite
         };
     }
 
@@ -1117,13 +1127,11 @@ internal class CenterDotOverlay : MonoBehaviour
         };
     }
 
-    private void EndChargeCue()
+    private void EndHintCharge()
     {
-        _chargeCueActive = false;
+        _hintChargeActive = false;
         _chargeStatePtr = IntPtr.Zero;
-        HideChargeRing();
-        _appliedHex = null;
-        ApplyStyle();
+        HideHint();
     }
 
     private bool TryGetMeleeCharge(out float progress, out float autoStrikeWarningProgress, out IntPtr statePtr)
@@ -1193,45 +1201,11 @@ internal class CenterDotOverlay : MonoBehaviour
         }
     }
 
-    private void HideChargeRing()
+    private void HideHint()
     {
-        var renderer = _chargeRing?.m_sprite;
+        var renderer = _hint?.m_sprite;
         if (renderer != null)
             renderer.color = new Color(1f, 0.05f, 0.08f, 0f);
-    }
-
-    private void ReadConfiguredColors(out Color halo, out Color ring, out Color dot)
-    {
-        var opacity = Mathf.Clamp01(Opacity.Value);
-        var color = ParseColor(ColorHex.Value);
-        color.a *= opacity;
-        var outline = ParseColor(OutlineColorHex.Value, new Color(1f, 0.2f, 0.333f, 1f));
-        outline.a *= Mathf.Clamp01(OutlineOpacity.Value);
-        halo = outline;
-        ring = new Color(0f, 0f, 0f, opacity);
-        dot = color;
-    }
-
-    private static Color InvertAndBrighten(Color color)
-    {
-        var inverted = new Color(1f - color.r, 1f - color.g, 1f - color.b, 1f);
-        var bright = Color.Lerp(inverted, Color.white, 0.35f);
-        bright.a = 1f;
-        return bright;
-    }
-
-    private void PaintSprites(Color halo, Color ring, Color dot)
-    {
-        SetRendererColor(_halo, halo);
-        SetRendererColor(_outline, ring);
-        SetRendererColor(_dot, dot);
-    }
-
-    private static void SetRendererColor(UI_Sprite? ui, Color color)
-    {
-        var renderer = ui?.m_sprite;
-        if (renderer != null)
-            renderer.color = color;
     }
 
     private static Color ParseColor(string raw, Color? fallback = null)
