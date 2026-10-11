@@ -25,6 +25,10 @@ namespace V921;
 /// A same-colored room swallows the fill. A black ring and a configurable outer ring
 /// sit behind it, so an edge still reads against that light.
 ///
+/// A melee charge blinks the dot, faster until <see cref="MWS_ChargeUp.m_maxDamageTime"/>.
+/// For the last 200ms before <see cref="MeleeAnimationSetDataBlock.AutoAttackTime"/>,
+/// when that charge swings on its own, the colors invert and brighten.
+///
 /// Shown only when all of these are true:
 /// - <see cref="GameStateManager.CurrentStateName"/> is <see cref="eGameStateName.InLevel"/>
 /// - <see cref="FocusStateManager.CurrentState"/> is <see cref="eFocusState.FPS"/>
@@ -43,6 +47,8 @@ internal class CenterDotOverlay : MonoBehaviour
     public static ConfigEntry<string> OutlineColorHex { get; private set; } = null!;
     public static ConfigEntry<int> OutlineSize { get; private set; } = null!;
     public static ConfigEntry<float> OutlineOpacity { get; private set; } = null!;
+    public static ConfigEntry<bool> MeleeChargeFeedback { get; private set; } = null!;
+    public static ConfigEntry<float> MeleeHintOpacity { get; private set; } = null!;
 
     /// <summary>
     /// The crosshair layer's vertical mapping does not match view space.
@@ -51,6 +57,20 @@ internal class CenterDotOverlay : MonoBehaviour
     private const float RecoilVerticalScale = 0.78f;
 
     private const float ScopeFovMargin = 2f;
+
+    /// <summary>
+    /// Half-period of the charge blink at the start and at full charge.
+    /// The gap shrinks with <see cref="MWS_ChargeUp.m_elapsed"/> / <see cref="MWS_ChargeUp.m_maxDamageTime"/>,
+    /// the same progress the vanilla charge crosshair uses.
+    /// </summary>
+    private const float ChargeBlinkIntervalStart = 0.18f;
+
+    private const float ChargeBlinkIntervalFull = 0.04f;
+
+    /// <summary>
+    /// Lead before <see cref="MeleeAnimationSetDataBlock.AutoAttackTime"/>, when a held charge swings by itself.
+    /// </summary>
+    private const float AutoStrikeWarningLead = 0.8f;
 
     internal static CenterDotOverlay? Current { get; private set; }
 
@@ -73,6 +93,11 @@ internal class CenterDotOverlay : MonoBehaviour
     private bool _recoilErrorLogged;
     private float _hipLookFov;
     private bool _hasHipLookFov;
+    private bool _chargeCueActive;
+    private bool _chargeBlinkOn = true;
+    private float _chargeBlinkTimer;
+    private IntPtr _chargeStatePtr;
+    private bool _chargeErrorLogged;
 
     public CenterDotOverlay(IntPtr ptr) : base(ptr)
     {
@@ -101,7 +126,7 @@ internal class CenterDotOverlay : MonoBehaviour
         ColorHex = config.Bind(
             "Center dot",
             "Color",
-            "00E5FF",
+            "5eb18e",
             "Dot color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         Size = config.Bind(
@@ -123,7 +148,7 @@ internal class CenterDotOverlay : MonoBehaviour
         OutlineColorHex = config.Bind(
             "Center dot",
             "Outline color",
-            "FF3355",
+            "b00a22",
             "Outer ring color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         OutlineSize = config.Bind(
@@ -137,9 +162,23 @@ internal class CenterDotOverlay : MonoBehaviour
         OutlineOpacity = config.Bind(
             "Center dot",
             "Outline opacity",
-            1f,
+            0.8f,
             new ConfigDescription(
                 "Outer ring opacity. 0 is invisible, 1 is solid.",
+                new AcceptableValueRange<float>(0f, 1f)));
+
+        MeleeChargeFeedback = config.Bind(
+            "Center dot",
+            "Melee charge feedback",
+            true,
+            "While a melee charge is building, blink the dot faster until it is full. For the last 200ms before that charged attack swings on its own, invert the colors and brighten them.");
+
+        MeleeHintOpacity = config.Bind(
+            "Center dot",
+            "Melee hint opacity",
+            0.1f,
+            new ConfigDescription(
+                "Opacity of the dot, ring, and outline during the dim half of a melee charge blink. 0 hides them, 1 keeps them solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
     }
 
@@ -186,7 +225,14 @@ internal class CenterDotOverlay : MonoBehaviour
         }
 
         if (show)
+        {
             ApplyRecoil();
+            ApplyMeleeChargeCue();
+        }
+        else if (_chargeCueActive)
+        {
+            EndChargeCue();
+        }
     }
 
     private void OnEnable()
@@ -575,6 +621,10 @@ internal class CenterDotOverlay : MonoBehaviour
         _appliedOutlineHex = null;
         _appliedOutlineSize = -1;
         _appliedOutlineOpacity = -1f;
+        _chargeCueActive = false;
+        _chargeStatePtr = IntPtr.Zero;
+        _chargeBlinkOn = true;
+        _chargeBlinkTimer = 0f;
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)
@@ -731,6 +781,170 @@ internal class CenterDotOverlay : MonoBehaviour
 
         if (renderer != null)
             renderer.transform.localScale = new Vector3(size, size, 1f);
+    }
+
+    /// <summary>
+    /// Charge progress matches <c>MWS_ChargeUp.Update</c>: elapsed / max damage time, clamped to 1.
+    /// The auto swing is <see cref="MeleeAnimationSetDataBlock.AutoAttackTime"/> on that same clock.
+    /// </summary>
+    private void ApplyMeleeChargeCue()
+    {
+        if (!MeleeChargeFeedback.Value || !TryGetMeleeCharge(out var progress, out var releaseWarning, out var statePtr))
+        {
+            if (_chargeCueActive)
+                EndChargeCue();
+            return;
+        }
+
+        if (!_chargeCueActive || statePtr != _chargeStatePtr)
+        {
+            _chargeCueActive = true;
+            _chargeStatePtr = statePtr;
+            _chargeBlinkOn = true;
+            _chargeBlinkTimer = 0f;
+        }
+
+        ReadConfiguredColors(out var halo, out var ring, out var dot);
+        if (releaseWarning)
+        {
+            PaintSprites(InvertAndBrighten(halo), InvertAndBrighten(ring), InvertAndBrighten(dot));
+            return;
+        }
+
+        if (progress >= 1f)
+        {
+            PaintSprites(halo, ring, dot);
+            return;
+        }
+
+        var interval = Mathf.Lerp(ChargeBlinkIntervalStart, ChargeBlinkIntervalFull, progress);
+        _chargeBlinkTimer += Time.deltaTime;
+        if (_chargeBlinkTimer >= interval)
+        {
+            _chargeBlinkTimer = 0f;
+            _chargeBlinkOn = !_chargeBlinkOn;
+        }
+
+        if (!_chargeBlinkOn)
+        {
+            var hintOpacity = Mathf.Clamp01(MeleeHintOpacity.Value);
+            halo.a = hintOpacity;
+            ring.a = hintOpacity;
+            dot.a = hintOpacity;
+        }
+
+        PaintSprites(halo, ring, dot);
+    }
+
+    private void EndChargeCue()
+    {
+        _chargeCueActive = false;
+        _chargeStatePtr = IntPtr.Zero;
+        _chargeBlinkOn = true;
+        _chargeBlinkTimer = 0f;
+        _appliedHex = null;
+        ApplyStyle();
+    }
+
+    private bool TryGetMeleeCharge(out float progress, out bool releaseWarning, out IntPtr statePtr)
+    {
+        progress = 0f;
+        releaseWarning = false;
+        statePtr = IntPtr.Zero;
+
+        try
+        {
+            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+                return false;
+
+            var holder = player!.FPItemHolder;
+            if (!Alive(holder))
+                return false;
+
+            var item = holder!.WieldedItem;
+            if (!Alive(item))
+                return false;
+
+            var melee = item!.TryCast<MeleeWeaponFirstPerson>();
+            if (!Alive(melee))
+                return false;
+
+            var stateName = melee!.CurrentStateName;
+            if (stateName != eMeleeWeaponState.AttackChargeUpLeft
+                && stateName != eMeleeWeaponState.AttackChargeUpRight)
+                return false;
+
+            var state = melee.CurrentState;
+            if (!Alive(state))
+                return false;
+
+            var chargeUp = state!.TryCast<MWS_ChargeUp>();
+            if (!Alive(chargeUp))
+                return false;
+
+            statePtr = chargeUp!.Pointer;
+            var elapsed = chargeUp.m_elapsed;
+            var maxDamage = chargeUp.m_maxDamageTime;
+            progress = maxDamage > 0.0001f ? Mathf.Clamp01(elapsed / maxDamage) : 1f;
+
+            var anim = melee.MeleeAnimationData;
+            if (Alive(anim))
+            {
+                var strikeAt = anim!.AutoAttackTime;
+                releaseWarning = progress >= 1f
+                    && strikeAt > 0f
+                    && elapsed >= strikeAt - AutoStrikeWarningLead;
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (!_chargeErrorLogged)
+            {
+                _chargeErrorLogged = true;
+                Plugin.Instance.Log.LogWarning($"Center dot melee charge cue failed: {ex.Message}");
+            }
+
+            return false;
+        }
+    }
+
+    private void ReadConfiguredColors(out Color halo, out Color ring, out Color dot)
+    {
+        var opacity = Mathf.Clamp01(Opacity.Value);
+        var color = ParseColor(ColorHex.Value);
+        color.a *= opacity;
+        var outline = ParseColor(OutlineColorHex.Value, new Color(1f, 0.2f, 0.333f, 1f));
+        outline.a *= Mathf.Clamp01(OutlineOpacity.Value);
+        halo = outline;
+        ring = new Color(0f, 0f, 0f, opacity);
+        dot = color;
+    }
+
+    /// <summary>
+    /// Flip the hue, then lift it toward white so the strike warning reads brighter than the resting dot.
+    /// </summary>
+    private static Color InvertAndBrighten(Color color)
+    {
+        var inverted = new Color(1f - color.r, 1f - color.g, 1f - color.b, 1f);
+        var bright = Color.Lerp(inverted, Color.white, 0.35f);
+        bright.a = 1f;
+        return bright;
+    }
+
+    private void PaintSprites(Color halo, Color ring, Color dot)
+    {
+        SetRendererColor(_halo, halo);
+        SetRendererColor(_outline, ring);
+        SetRendererColor(_dot, dot);
+    }
+
+    private static void SetRendererColor(UI_Sprite? ui, Color color)
+    {
+        var renderer = ui?.m_sprite;
+        if (renderer != null)
+            renderer.color = color;
     }
 
     private static Color ParseColor(string raw, Color? fallback = null)
