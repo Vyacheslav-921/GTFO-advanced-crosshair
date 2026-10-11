@@ -19,11 +19,11 @@ internal enum ReticleShape
 }
 
 /// <summary>
-/// Draws a small circle at the visor center while aiming.
+/// Draws a configurable crosshair shape at the visor center while aiming.
 ///
 /// The player HUD is Cell UI. <see cref="PlayerGuiLayer.m_movementRoot"/> is the group
 /// the game shifts for visor sway; the PlayerLayer canvas above it stays put.
-/// The dot is a HUD sprite under that movement root, placed at the canvas center,
+/// The shape is a HUD sprite under that movement root, placed at the canvas center,
 /// then registered with <see cref="UI_Core.UIPassHUD"/> so the visor blit
 /// (pixel, skew, opacity) includes it.
 ///
@@ -31,8 +31,8 @@ internal enum ReticleShape
 /// a viewport point around (0.5, 0.5). That offset is added in canvas space on top of
 /// the sway rest position. Shotguns stay centered: their pellets follow the camera.
 ///
-/// A same-colored room swallows the fill. A black ring and a configurable outer ring
-/// sit behind it, so an edge still reads against that light.
+/// The crosshair has three parts from the center outward: Center, Outline, and Hint.
+/// Center includes a dark backing so it remains readable against similarly colored rooms.
 ///
 /// A melee charge draws a configurable red shape at its configured diameter, then shrinks it
 /// to the crosshair's outer edge as <see cref="MWS_ChargeUp.m_elapsed"/> reaches full damage.
@@ -42,16 +42,16 @@ internal enum ReticleShape
 /// - <see cref="FocusStateManager.CurrentState"/> is <see cref="eFocusState.FPS"/>
 /// - the player is not aiming through a magnified scope
 /// </summary>
-internal class CenterDotOverlay : MonoBehaviour
+internal class CrosshairOverlay : MonoBehaviour
 {
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<bool> HideWhenScoped { get; private set; } = null!;
     public static ConfigEntry<bool> FollowRecoil { get; private set; } = null!;
-    public static ConfigEntry<string> Shape { get; private set; } = null!;
-    public static ConfigEntry<string> ColorHex { get; private set; } = null!;
-    public static ConfigEntry<int> Size { get; private set; } = null!;
+    public static ConfigEntry<string> CenterShape { get; private set; } = null!;
+    public static ConfigEntry<string> CenterColorHex { get; private set; } = null!;
+    public static ConfigEntry<int> CenterSize { get; private set; } = null!;
     public static ConfigEntry<float> CenterThickness { get; private set; } = null!;
-    public static ConfigEntry<float> Opacity { get; private set; } = null!;
+    public static ConfigEntry<float> CenterOpacity { get; private set; } = null!;
     public static ConfigEntry<string> OutlineShape { get; private set; } = null!;
     public static ConfigEntry<string> OutlineColorHex { get; private set; } = null!;
     public static ConfigEntry<int> OutlineSize { get; private set; } = null!;
@@ -75,20 +75,20 @@ internal class CenterDotOverlay : MonoBehaviour
     private const float RecoilVerticalScale = 0.78f;
 
     private const float ScopeFovMargin = 2f;
-    private const float MinimumCenterPatternSize = 9f;
-    private const float MinimumOutlinePatternSize = 12f;
+    private const float MinimumCenterShapeSize = 9f;
+    private const float MinimumOutlineShapeSize = 12f;
     private const float HintReadyPadding = 2f;
 
-    internal static CenterDotOverlay? Current { get; private set; }
+    internal static CrosshairOverlay? Current { get; private set; }
 
     private GameObject? _root;
     private RectTransform? _rect;
     private Vector2 _restAnchored;
     private IntPtr _parentPtr;
-    private UI_Sprite? _halo;
-    private UI_Sprite? _outline;
-    private UI_Sprite? _dot;
-    private UI_Sprite? _hint;
+    private UI_Sprite? _centerShape;
+    private UI_Sprite? _centerBackingShape;
+    private UI_Sprite? _outlineShape;
+    private UI_Sprite? _hintShape;
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -103,17 +103,17 @@ internal class CenterDotOverlay : MonoBehaviour
     private Sprite? _hintCircleSprite;
     private readonly Dictionary<int, Sprite?[]> _hintShapeCache = new();
     private float _nextCreateAttempt;
-    private string? _appliedHex;
-    private int _appliedSize = -1;
-    private float _appliedOpacity = -1f;
-    private string? _appliedOutlineHex;
+    private string? _appliedCenterColorHex;
+    private int _appliedCenterSize = -1;
+    private float _appliedCenterOpacity = -1f;
+    private string? _appliedOutlineColorHex;
     private int _appliedOutlineSize = -1;
     private float _appliedOutlineOpacity = -1f;
     private float _appliedOutlineSpacing = -1f;
     private float _appliedCenterThickness = -1f;
     private float _appliedOutlineThickness = -1f;
     private float _appliedHintThickness = -1f;
-    private ReticleShape? _appliedShape;
+    private ReticleShape? _appliedCenterShape;
     private ReticleShape? _appliedOutlineShape;
     private bool _stateErrorLogged;
     private bool _scopeErrorLogged;
@@ -124,7 +124,7 @@ internal class CenterDotOverlay : MonoBehaviour
     private IntPtr _chargeStatePtr;
     private bool _chargeErrorLogged;
 
-    public CenterDotOverlay(IntPtr ptr) : base(ptr)
+    public CrosshairOverlay(IntPtr ptr) : base(ptr)
     {
     }
 
@@ -148,7 +148,7 @@ internal class CenterDotOverlay : MonoBehaviour
             true,
             "Move the crosshair center with weapon recoil that does not follow the camera. Shotguns stay centered.");
 
-        Shape = config.Bind(
+        CenterShape = config.Bind(
             "1 - Center",
             "Shape",
             "Circle",
@@ -156,18 +156,18 @@ internal class CenterDotOverlay : MonoBehaviour
                 "Center shape.",
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
 
-        ColorHex = config.Bind(
+        CenterColorHex = config.Bind(
             "1 - Center",
             "Color",
             "5eb18e",
             "Center color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
-        Size = config.Bind(
+        CenterSize = config.Bind(
             "1 - Center",
             "Size",
             3,
             new ConfigDescription(
-                "Center shape diameter in HUD units. A dark contrast layer and the outline are drawn behind it.",
+                "Center shape diameter in HUD units. Center's dark backing and Outline are drawn behind it.",
                 new AcceptableValueRange<int>(1, 32)));
 
         CenterThickness = config.Bind(
@@ -178,7 +178,7 @@ internal class CenterDotOverlay : MonoBehaviour
                 "Center shape thickness. For Two dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
-        Opacity = config.Bind(
+        CenterOpacity = config.Bind(
             "1 - Center",
             "Opacity",
             0.9f,
@@ -309,7 +309,7 @@ internal class CenterDotOverlay : MonoBehaviour
             if (!_stateErrorLogged)
             {
                 _stateErrorLogged = true;
-                Plugin.Instance.Log.LogWarning($"Center dot HUD lookup failed: {ex.Message}");
+                Plugin.Instance.Log.LogWarning($"Crosshair HUD lookup failed: {ex.Message}");
             }
 
             return;
@@ -342,7 +342,7 @@ internal class CenterDotOverlay : MonoBehaviour
         if (show)
         {
             ApplyRecoil();
-            ApplyMeleeChargeCue();
+            ApplyHint();
         }
         else if (_hintChargeActive)
         {
@@ -362,7 +362,7 @@ internal class CenterDotOverlay : MonoBehaviour
     }
 
     /// <summary>
-    /// Called at the end of <see cref="FPS_RecoilSystem.FPS_Update"/> so the dot
+    /// Called at the end of <see cref="FPS_RecoilSystem.FPS_Update"/> so the center shape
     /// uses the recoil point from this frame.
     /// </summary>
     internal void ApplyRecoil()
@@ -440,7 +440,7 @@ internal class CenterDotOverlay : MonoBehaviour
             if (!_recoilErrorLogged)
             {
                 _recoilErrorLogged = true;
-                Plugin.Instance.Log.LogWarning($"Center dot recoil follow failed: {ex.Message}");
+                Plugin.Instance.Log.LogWarning($"Center shape recoil follow failed: {ex.Message}");
             }
 
             return false;
@@ -545,7 +545,7 @@ internal class CenterDotOverlay : MonoBehaviour
             if (!_stateErrorLogged)
             {
                 _stateErrorLogged = true;
-                Plugin.Instance.Log.LogWarning($"Center dot visibility check failed: {ex.Message}");
+                Plugin.Instance.Log.LogWarning($"Crosshair visibility check failed: {ex.Message}");
             }
 
             return false;
@@ -588,7 +588,7 @@ internal class CenterDotOverlay : MonoBehaviour
             if (!_scopeErrorLogged)
             {
                 _scopeErrorLogged = true;
-                Plugin.Instance.Log.LogWarning($"Center dot scope check failed: {ex.Message}");
+                Plugin.Instance.Log.LogWarning($"Crosshair scope check failed: {ex.Message}");
             }
 
             return false;
@@ -687,7 +687,7 @@ internal class CenterDotOverlay : MonoBehaviour
             ApplyHintThickness(hintThickness);
             var sprite = _centerCircleSprite!;
 
-            root = new GameObject("GTFO Center Aim Dot");
+            root = new GameObject("GTFO Crosshair");
             var rect = root.AddComponent<RectTransform>();
             rect.SetParent(parent, false);
             PlaceAtCenter(rect);
@@ -697,48 +697,48 @@ internal class CenterDotOverlay : MonoBehaviour
             _rect = rect;
             _restAnchored = rect.anchoredPosition;
 
-            _halo = CreateSprite(rect, sprite, "Halo", layer, reference);
-            _outline = CreateSprite(rect, sprite, "Outline", layer, reference);
-            _dot = CreateSprite(rect, sprite, "Dot", layer, reference);
-            _hint = CreateSprite(rect, _hintCircleSprite!, "Melee Charge Hint", layer, reference);
+            _centerShape = CreateSprite(rect, sprite, "Center Shape", layer, reference);
+            _centerBackingShape = CreateSprite(rect, sprite, "Center Backing Shape", layer, reference);
+            _outlineShape = CreateSprite(rect, sprite, "Outline Shape", layer, reference);
+            _hintShape = CreateSprite(rect, _hintCircleSprite!, "Hint Shape", layer, reference);
             if (reference != null
-                && _dot.m_sprite != null
-                && _outline.m_sprite != null
-                && _halo.m_sprite != null
-                && _hint.m_sprite != null)
+                && _centerShape.m_sprite != null
+                && _centerBackingShape.m_sprite != null
+                && _outlineShape.m_sprite != null
+                && _hintShape.m_sprite != null)
             {
-                _halo.m_sprite.sortingOrder = reference.sortingOrder + 10;
-                _outline.m_sprite.sortingOrder = reference.sortingOrder + 11;
-                _dot.m_sprite.sortingOrder = reference.sortingOrder + 12;
-                _hint.m_sprite.sortingOrder = reference.sortingOrder + 13;
+                _outlineShape.m_sprite.sortingOrder = reference.sortingOrder + 10;
+                _centerBackingShape.m_sprite.sortingOrder = reference.sortingOrder + 11;
+                _centerShape.m_sprite.sortingOrder = reference.sortingOrder + 12;
+                _hintShape.m_sprite.sortingOrder = reference.sortingOrder + 13;
             }
 
             _root = root;
             _parentPtr = parent.Pointer;
-            _appliedHex = null;
-            _appliedSize = -1;
-            _appliedOpacity = -1f;
-            _appliedOutlineHex = null;
+            _appliedCenterColorHex = null;
+            _appliedCenterSize = -1;
+            _appliedCenterOpacity = -1f;
+            _appliedOutlineColorHex = null;
             _appliedOutlineSize = -1;
             _appliedOutlineOpacity = -1f;
             _appliedOutlineSpacing = -1f;
             _appliedCenterThickness = centerThickness;
             _appliedOutlineThickness = outlineThickness;
-            _appliedShape = null;
+            _appliedCenterShape = null;
             _appliedOutlineShape = null;
             ApplyStyle();
             HideHint();
             _root.SetActive(false);
-            Plugin.Instance.Log.LogInfo($"Center aim dot attached to HUD group '{parent.name}'.");
+            Plugin.Instance.Log.LogInfo($"Crosshair attached to HUD group '{parent.name}'.");
         }
         catch (Exception ex)
         {
             _root = null;
             _rect = null;
-            _halo = null;
-            _outline = null;
-            _dot = null;
-            _hint = null;
+            _outlineShape = null;
+            _centerBackingShape = null;
+            _centerShape = null;
+            _hintShape = null;
             _centerDotsSprite = null;
             _centerArcsSprite = null;
             _centerLinesSprite = null;
@@ -755,7 +755,7 @@ internal class CenterDotOverlay : MonoBehaviour
             if (root != null)
                 Destroy(root);
 
-            Plugin.Instance.Log.LogWarning($"Center aim dot create failed: {ex.Message}");
+            Plugin.Instance.Log.LogWarning($"Crosshair creation failed: {ex.Message}");
         }
     }
 
@@ -767,10 +767,10 @@ internal class CenterDotOverlay : MonoBehaviour
         _root = null;
         _rect = null;
         _restAnchored = Vector2.zero;
-        _halo = null;
-        _outline = null;
-        _dot = null;
-        _hint = null;
+        _outlineShape = null;
+        _centerBackingShape = null;
+        _centerShape = null;
+        _hintShape = null;
         _centerDotsSprite = null;
         _centerArcsSprite = null;
         _centerLinesSprite = null;
@@ -784,17 +784,17 @@ internal class CenterDotOverlay : MonoBehaviour
         _hintLinesSprite = null;
         _hintCircleSprite = null;
         _parentPtr = IntPtr.Zero;
-        _appliedHex = null;
-        _appliedSize = -1;
-        _appliedOpacity = -1f;
-        _appliedOutlineHex = null;
+        _appliedCenterColorHex = null;
+        _appliedCenterSize = -1;
+        _appliedCenterOpacity = -1f;
+        _appliedOutlineColorHex = null;
         _appliedOutlineSize = -1;
         _appliedOutlineOpacity = -1f;
         _appliedOutlineSpacing = -1f;
         _appliedCenterThickness = -1f;
         _appliedOutlineThickness = -1f;
         _appliedHintThickness = -1f;
-        _appliedShape = null;
+        _appliedCenterShape = null;
         _appliedOutlineShape = null;
         _hintChargeActive = false;
         _chargeStatePtr = IntPtr.Zero;
@@ -832,8 +832,8 @@ internal class CenterDotOverlay : MonoBehaviour
     }
 
     /// <summary>
-    /// Keep the dot on the visor center, stored as a local offset of the moving group.
-    /// Later sway of that group carries the dot with it.
+    /// Keep the shape on the visor center, stored as a local offset of the moving group.
+    /// Later sway of that group carries the shape with it.
     /// </summary>
     private static void PlaceAtCenter(RectTransform rect)
     {
@@ -870,7 +870,7 @@ internal class CenterDotOverlay : MonoBehaviour
         }
         catch (Exception ex)
         {
-            Plugin.Instance.Log.LogWarning($"Center dot HUD pass refresh failed: {ex.Message}");
+            Plugin.Instance.Log.LogWarning($"Crosshair HUD pass refresh failed: {ex.Message}");
         }
     }
 
@@ -959,13 +959,13 @@ internal class CenterDotOverlay : MonoBehaviour
 
     private void ApplyStyle()
     {
-        if (_dot == null || _outline == null || _halo == null)
+        if (_centerShape == null || _centerBackingShape == null || _outlineShape == null)
             return;
 
-        var hex = ColorHex.Value;
-        var size = Mathf.Clamp(Size.Value, 1, 32);
-        var opacity = Mathf.Clamp01(Opacity.Value);
-        var shape = ParseShape(Shape.Value);
+        var hex = CenterColorHex.Value;
+        var size = Mathf.Clamp(CenterSize.Value, 1, 32);
+        var opacity = Mathf.Clamp01(CenterOpacity.Value);
+        var shape = ParseShape(CenterShape.Value);
         var centerThickness = Mathf.Clamp(CenterThickness.Value, 0.5f, 16f);
         var outlineHex = OutlineColorHex.Value;
         var outlineSize = Mathf.Clamp(OutlineSize.Value, 1, 64);
@@ -975,22 +975,22 @@ internal class CenterDotOverlay : MonoBehaviour
         var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
         var spritesChanged = RefreshCrosshairShapeSprites(centerThickness, outlineThickness);
         if (!spritesChanged
-            && hex == _appliedHex
-            && size == _appliedSize
-            && Mathf.Approximately(opacity, _appliedOpacity)
-            && shape == _appliedShape
-            && outlineHex == _appliedOutlineHex
+            && hex == _appliedCenterColorHex
+            && size == _appliedCenterSize
+            && Mathf.Approximately(opacity, _appliedCenterOpacity)
+            && shape == _appliedCenterShape
+            && outlineHex == _appliedOutlineColorHex
             && outlineSize == _appliedOutlineSize
             && Mathf.Approximately(outlineOpacity, _appliedOutlineOpacity)
             && Mathf.Approximately(outlineSpacing, _appliedOutlineSpacing)
             && outlineShape == _appliedOutlineShape)
             return;
 
-        _appliedHex = hex;
-        _appliedSize = size;
-        _appliedOpacity = opacity;
-        _appliedShape = shape;
-        _appliedOutlineHex = outlineHex;
+        _appliedCenterColorHex = hex;
+        _appliedCenterSize = size;
+        _appliedCenterOpacity = opacity;
+        _appliedCenterShape = shape;
+        _appliedOutlineColorHex = outlineHex;
         _appliedOutlineSize = outlineSize;
         _appliedOutlineOpacity = outlineOpacity;
         _appliedOutlineSpacing = outlineSpacing;
@@ -1005,17 +1005,17 @@ internal class CenterDotOverlay : MonoBehaviour
             outlineSize,
             visibleCenterSize,
             outlineSpacing);
-        SetRendererSprite(_halo, SelectedOutlineSprite(outlineShape));
-        SetRendererSprite(_outline, SelectedCenterSprite(shape));
-        SetRendererSprite(_dot, SelectedCenterSprite(shape));
-        SetSprite(_halo, outline, visibleOutlineSize);
-        SetSprite(_outline, new Color(0f, 0f, 0f, opacity), visibleCenterSize + 3f);
-        SetSprite(_dot, color, visibleCenterSize);
+        SetRendererSprite(_outlineShape, SelectedOutlineSprite(outlineShape));
+        SetRendererSprite(_centerBackingShape, SelectedCenterSprite(shape));
+        SetRendererSprite(_centerShape, SelectedCenterSprite(shape));
+        SetSprite(_outlineShape, outline, visibleOutlineSize);
+        SetSprite(_centerBackingShape, new Color(0f, 0f, 0f, opacity), visibleCenterSize + 3f);
+        SetSprite(_centerShape, color, visibleCenterSize);
     }
 
     private static float VisibleCenterSize(float configuredSize)
     {
-        return Mathf.Max(configuredSize, MinimumCenterPatternSize);
+        return Mathf.Max(configuredSize, MinimumCenterShapeSize);
     }
 
     private static float VisibleOutlineSize(
@@ -1023,7 +1023,7 @@ internal class CenterDotOverlay : MonoBehaviour
         float visibleCenterSize,
         float spacing)
     {
-        var readableSize = Mathf.Max(configuredSize, MinimumOutlinePatternSize);
+        var readableSize = Mathf.Max(configuredSize, MinimumOutlineShapeSize);
         return Mathf.Max(readableSize, visibleCenterSize + spacing * 2f);
     }
 
@@ -1134,7 +1134,7 @@ internal class CenterDotOverlay : MonoBehaviour
     /// <summary>
     /// Charge progress matches <c>MWS_ChargeUp.Update</c>: elapsed / max damage time, clamped to 1.
     /// </summary>
-    private void ApplyMeleeChargeCue()
+    private void ApplyHint()
     {
         if (!HintEnabled.Value)
         {
@@ -1175,7 +1175,7 @@ internal class CenterDotOverlay : MonoBehaviour
         var baseThickness = Mathf.Clamp(HintThickness.Value, 0.5f, 16f);
         var thicknessIncrease = Mathf.Clamp(HintAutoAttackThicknessIncrease.Value, 0f, 200f) * 0.01f;
         ApplyHintThickness(baseThickness * (1f + thicknessIncrease * easedWarning));
-        var renderer = _hint?.m_sprite;
+        var renderer = _hintShape?.m_sprite;
         if (renderer != null)
             renderer.sprite = SelectedHintSprite();
         if (autoStrikeWarningProgress > 0f)
@@ -1184,17 +1184,17 @@ internal class CenterDotOverlay : MonoBehaviour
             autoAttackColor.a *= Mathf.Clamp01(HintOpacity.Value);
             color = Color.Lerp(color, autoAttackColor, easedWarning);
         }
-        SetSprite(_hint!, color, diameter);
+        SetSprite(_hintShape!, color, diameter);
     }
 
     private void ShowHintAtOriginalSize()
     {
         ApplyHintThickness(Mathf.Clamp(HintThickness.Value, 0.5f, 16f));
-        var renderer = _hint?.m_sprite;
+        var renderer = _hintShape?.m_sprite;
         if (renderer != null)
             renderer.sprite = SelectedHintSprite();
 
-        SetSprite(_hint!, ConfiguredHintColor(), HintOriginalSize(CurrentCrosshairDiameter()));
+        SetSprite(_hintShape!, ConfiguredHintColor(), HintOriginalSize(CurrentCrosshairDiameter()));
     }
 
     private static Color ConfiguredHintColor()
@@ -1206,7 +1206,7 @@ internal class CenterDotOverlay : MonoBehaviour
 
     private float CurrentCrosshairDiameter()
     {
-        var visibleCenterSize = VisibleCenterSize(Mathf.Clamp(Size.Value, 1, 32));
+        var visibleCenterSize = VisibleCenterSize(Mathf.Clamp(CenterSize.Value, 1, 32));
         var visibleOutlineSize = VisibleOutlineSize(
             Mathf.Clamp(OutlineSize.Value, 1, 64),
             visibleCenterSize,
@@ -1311,7 +1311,7 @@ internal class CenterDotOverlay : MonoBehaviour
             if (!_chargeErrorLogged)
             {
                 _chargeErrorLogged = true;
-                Plugin.Instance.Log.LogWarning($"Center dot melee charge cue failed: {ex.Message}");
+                Plugin.Instance.Log.LogWarning($"Hint melee charge update failed: {ex.Message}");
             }
 
             return false;
@@ -1320,7 +1320,7 @@ internal class CenterDotOverlay : MonoBehaviour
 
     private void HideHint()
     {
-        var renderer = _hint?.m_sprite;
+        var renderer = _hintShape?.m_sprite;
         if (renderer != null)
             renderer.color = new Color(1f, 0.05f, 0.08f, 0f);
     }

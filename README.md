@@ -1,4 +1,4 @@
-# V-921
+# gtfo-advanced-crosshair
 
 BepInEx 6 (IL2CPP) plugin for [GTFO](https://store.steampowered.com/app/493520/GTFO/) that replaces the bottom-right watermark text (build / version string) with the **current local time** (`HH:mm:ss`).
 
@@ -31,7 +31,7 @@ dotnet build
 
 Output:
 
-`build\V-921.dll`
+`build\gtfo-advanced-crosshair.dll`
 
 Copy that DLL into the profile’s `BepInEx\plugins\` folder, then launch GTFO via r2modman **Play Modded**.
 
@@ -39,7 +39,7 @@ Copy that DLL into the profile’s `BepInEx\plugins\` folder, then launch GTFO v
 
 In the BepInEx console or `BepInEx\LogOutput.log`:
 
-- `V-921 is loaded!`
+- `gtfo-advanced-crosshair is loaded!`
 - `Clock overlay ready (awaits watermark bind).`
 - `Harmony patches applied.`
 - After the watermark UI is ready: `Clock bound to PUI_Watermark (poll).`

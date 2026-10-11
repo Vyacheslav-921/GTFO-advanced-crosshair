@@ -5,8 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <DebugType>None</DebugType>
-    <AssemblyName>gtfo-crosshair-dot</AssemblyName>
-    <RootNamespace>gtfo-crosshair-dot</RootNamespace>
+    <AssemblyName>gtfo-advanced-crosshair</AssemblyName>
+    <RootNamespace>gtfo-advanced-crosshair</RootNamespace>
     <OutputPath>$(MSBuildProjectDirectory)\build\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
