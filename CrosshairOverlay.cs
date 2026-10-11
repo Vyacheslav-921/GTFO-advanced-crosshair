@@ -46,6 +46,7 @@ internal class CrosshairOverlay : MonoBehaviour
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<bool> ShowWeapons { get; private set; } = null!;
     public static ConfigEntry<bool> ShowTools { get; private set; } = null!;
+    public static ConfigEntry<bool> ShowPacks { get; private set; } = null!;
     public static ConfigEntry<bool> ShowItems { get; private set; } = null!;
     public static ConfigEntry<bool> HideWhenScoped { get; private set; } = null!;
     public static ConfigEntry<bool> FollowRecoil { get; private set; } = null!;
@@ -54,6 +55,8 @@ internal class CrosshairOverlay : MonoBehaviour
     public static ConfigEntry<int> CenterSize { get; private set; } = null!;
     public static ConfigEntry<float> CenterThickness { get; private set; } = null!;
     public static ConfigEntry<float> CenterOpacity { get; private set; } = null!;
+    public static ConfigEntry<string> AutoAttackBlinkColorHex { get; private set; } = null!;
+    public static ConfigEntry<float> AutoAttackBlinkThicknessIncrease { get; private set; } = null!;
     public static ConfigEntry<string> OutlineShape { get; private set; } = null!;
     public static ConfigEntry<string> OutlineColorHex { get; private set; } = null!;
     public static ConfigEntry<int> OutlineSize { get; private set; } = null!;
@@ -80,6 +83,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private const float MinimumCenterShapeSize = 9f;
     private const float MinimumOutlineShapeSize = 12f;
     private const float HintReadyPadding = 2f;
+    private const float HeldItemCenterClearance = 12f;
 
     internal static CrosshairOverlay? Current { get; private set; }
 
@@ -90,6 +94,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private UI_Sprite? _centerShape;
     private UI_Sprite? _outlineShape;
     private UI_Sprite? _hintShape;
+    private readonly PackHintOverlay _packHints = new();
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -124,6 +129,13 @@ internal class CrosshairOverlay : MonoBehaviour
     private bool _hintChargeActive;
     private IntPtr _chargeStatePtr;
     private bool _chargeErrorLogged;
+    private bool _crosshairShapesActive;
+    private bool _autoAttackBlinkActive;
+    private float _autoAttackBlinkStartedAt = -1f;
+    private float _appliedBlinkAmount = -1f;
+    private bool _appliedCenterClearance;
+    private IntPtr _autoAttackBlinkChargePtr;
+    private int _autoAttackBlinkTriggers;
 
     public CrosshairOverlay(IntPtr ptr) : base(ptr)
     {
@@ -149,11 +161,17 @@ internal class CrosshairOverlay : MonoBehaviour
             false,
             "Show the crosshair while holding a class tool or the hacking tool.");
 
+        ShowPacks = config.Bind(
+            "Show for:",
+            "Packs",
+            false,
+            "Show the crosshair while holding a resource pack.");
+
         ShowItems = config.Bind(
             "Show for:",
             "Items",
             false,
-            "Show the crosshair while holding consumables, resource packs, or carried objects.");
+            "Show the crosshair while holding consumables or carried objects.");
 
         HideWhenScoped = config.Bind(
             "2 - Center",
@@ -184,7 +202,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterSize = config.Bind(
             "2 - Center",
             "Size",
-            4,
+            6,
             new ConfigDescription(
                 "Center shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 32)));
@@ -192,7 +210,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterThickness = config.Bind(
             "2 - Center",
             "Thickness",
-            4.5f,
+            4.95f,
             new ConfigDescription(
                 "Center shape thickness. For Two dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
@@ -204,6 +222,20 @@ internal class CrosshairOverlay : MonoBehaviour
             new ConfigDescription(
                 "Center opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
+
+        AutoAttackBlinkColorHex = config.Bind(
+            "2 - Center",
+            "Auto attack blink color",
+            "ff2a2a",
+            "Color Outline blinks to just before an automatic melee attack, as RRGGBB or RRGGBBAA.");
+
+        AutoAttackBlinkThicknessIncrease = config.Bind(
+            "2 - Center",
+            "Auto attack blink thickness increase",
+            90f,
+            new ConfigDescription(
+                "Percentage by which Center and Outline thickness grows during the auto-attack blink.",
+                new AcceptableValueRange<float>(0f, 200f)));
 
         OutlineShape = config.Bind(
             "3 - Outline",
@@ -222,7 +254,7 @@ internal class CrosshairOverlay : MonoBehaviour
         OutlineSize = config.Bind(
             "3 - Outline",
             "Size",
-            10,
+            14,
             new ConfigDescription(
                 "Outline shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 64)));
@@ -230,7 +262,7 @@ internal class CrosshairOverlay : MonoBehaviour
         OutlineThickness = config.Bind(
             "3 - Outline",
             "Thickness",
-            4.5f,
+            4.95f,
             new ConfigDescription(
                 "Outline shape thickness. For Two dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
@@ -274,7 +306,7 @@ internal class CrosshairOverlay : MonoBehaviour
         HintColorHex = config.Bind(
             "4 - Hint",
             "Color",
-            "e5c369",
+            "ffffff",
             "Melee charge hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         HintAutoAttackColorHex = config.Bind(
@@ -348,25 +380,35 @@ internal class CrosshairOverlay : MonoBehaviour
                 return;
         }
 
-        var show = ShouldShow();
-        if (show)
-            ApplyStyle();
-
-        if (_root!.activeSelf != show)
+        var showCrosshair = ShouldShow();
+        var showPackHint = _packHints.Update(
+            _rect,
+            _rect != null ? _rect.gameObject.layer : 0,
+            InHudContext(),
+            CurrentCrosshairDiameter());
+        var showRoot = showCrosshair || showPackHint;
+        if (showCrosshair)
         {
-            _root.SetActive(show);
+            if (!_crosshairShapesActive)
+                InvalidateAppliedStyle();
+            ApplyStyle();
+        }
+
+        SetCrosshairShapesActive(showCrosshair);
+
+        if (showCrosshair)
+            ApplyHint();
+        else if (_hintChargeActive)
+            EndHintCharge();
+
+        if (_root!.activeSelf != showRoot)
+        {
+            _root.SetActive(showRoot);
             RefreshHudPass();
         }
 
-        if (show)
-        {
+        if (showRoot)
             ApplyRecoil();
-            ApplyHint();
-        }
-        else if (_hintChargeActive)
-        {
-            EndHintCharge();
-        }
     }
 
     private void OnEnable()
@@ -378,6 +420,58 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         if (_root != null && _root.activeSelf)
             ApplyRecoil();
+    }
+
+    /// <summary>
+    /// Starts the same-time blink the vanilla reticle uses before a charged auto-attack.
+    /// </summary>
+    internal void StartAutoAttackBlink()
+    {
+        TryGetMeleeCharge(out _, out _, out var statePtr);
+        if (statePtr != _autoAttackBlinkChargePtr)
+        {
+            _autoAttackBlinkChargePtr = statePtr;
+            _autoAttackBlinkTriggers = 0;
+            _autoAttackBlinkActive = false;
+        }
+
+        _autoAttackBlinkTriggers++;
+        if (_autoAttackBlinkTriggers < 2)
+            return;
+
+        _autoAttackBlinkActive = true;
+        _autoAttackBlinkStartedAt = Time.unscaledTime;
+        _appliedBlinkAmount = -1f;
+    }
+
+    private float AutoAttackBlinkAmount()
+    {
+        if (!TryGetMeleeCharge(out _, out _, out var statePtr))
+        {
+            _autoAttackBlinkActive = false;
+            _autoAttackBlinkStartedAt = -1f;
+            _autoAttackBlinkChargePtr = IntPtr.Zero;
+            _autoAttackBlinkTriggers = 0;
+            return 0f;
+        }
+
+        if (statePtr != _autoAttackBlinkChargePtr)
+        {
+            _autoAttackBlinkChargePtr = statePtr;
+            _autoAttackBlinkTriggers = 0;
+            _autoAttackBlinkActive = false;
+            return 0f;
+        }
+
+        if (!_autoAttackBlinkActive)
+            return 0f;
+
+        const float halfPulse = 0.09f;
+        var elapsed = Time.unscaledTime - _autoAttackBlinkStartedAt;
+        if (elapsed >= halfPulse)
+            return 1f;
+
+        return Mathf.Clamp01(elapsed / halfPulse);
     }
 
     /// <summary>
@@ -546,18 +640,33 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private bool ShouldShow()
     {
-        if (!Enabled.Value)
+        if (!Enabled.Value || !InHudContext())
             return false;
 
+        try
+        {
+            return WieldedCategoryIsShown();
+        }
+        catch (Exception ex)
+        {
+            if (!_stateErrorLogged)
+            {
+                _stateErrorLogged = true;
+                Plugin.Instance.Log.LogWarning($"Crosshair visibility check failed: {ex.Message}");
+            }
+
+            return false;
+        }
+    }
+
+    private bool InHudContext()
+    {
         try
         {
             if (GameStateManager.CurrentStateName != eGameStateName.InLevel)
                 return false;
 
             if (FocusStateManager.CurrentState != eFocusState.FPS)
-                return false;
-
-            if (!WieldedCategoryIsShown())
                 return false;
 
             return !HideWhenScoped.Value || !AimingThroughScope();
@@ -576,29 +685,18 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private static bool WieldedCategoryIsShown()
     {
-        if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+        if (!TryGetWieldedSlot(out var slot))
             return false;
 
-        var holder = player!.FPItemHolder;
-        if (!Alive(holder))
-            return false;
-
-        var item = holder!.WieldedItem;
-        if (!Alive(item))
-            return false;
-
-        var data = item!.ItemDataBlock;
-        if (!Alive(data))
-            return false;
-
-        return data!.inventorySlot switch
+        return slot switch
         {
             InventorySlot.GearStandard or InventorySlot.GearSpecial or InventorySlot.GearMelee
                 => ShowWeapons.Value,
             InventorySlot.GearClass or InventorySlot.HackingTool
                 => ShowTools.Value,
-            InventorySlot.ResourcePack or InventorySlot.Consumable
-                or InventorySlot.ConsumableHeavy or InventorySlot.InPocket
+            InventorySlot.ResourcePack
+                => ShowPacks.Value,
+            InventorySlot.Consumable or InventorySlot.ConsumableHeavy or InventorySlot.InPocket
                 or InventorySlot.InLevelCarry or InventorySlot.Pickup
                 => ShowItems.Value,
             _ => false
@@ -776,6 +874,7 @@ internal class CrosshairOverlay : MonoBehaviour
             _appliedOutlineThickness = outlineThickness;
             _appliedCenterShape = null;
             _appliedOutlineShape = null;
+            _crosshairShapesActive = true;
             ApplyStyle();
             HideHint();
             _root.SetActive(false);
@@ -846,6 +945,14 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedOutlineShape = null;
         _hintChargeActive = false;
         _chargeStatePtr = IntPtr.Zero;
+        _crosshairShapesActive = false;
+        _autoAttackBlinkActive = false;
+        _autoAttackBlinkStartedAt = -1f;
+        _appliedBlinkAmount = -1f;
+        _appliedCenterClearance = false;
+        _autoAttackBlinkChargePtr = IntPtr.Zero;
+        _autoAttackBlinkTriggers = 0;
+        _packHints.Detach();
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)
@@ -877,6 +984,36 @@ internal class CrosshairOverlay : MonoBehaviour
         ui.m_rect = rect;
         ui.m_sprite = renderer;
         return ui;
+    }
+
+    private void SetCrosshairShapesActive(bool active)
+    {
+        if (_crosshairShapesActive == active)
+            return;
+
+        if (_centerShape != null)
+            _centerShape.gameObject.SetActive(active);
+        if (_outlineShape != null)
+            _outlineShape.gameObject.SetActive(active);
+        if (_hintShape != null)
+            _hintShape.gameObject.SetActive(active);
+
+        _crosshairShapesActive = active;
+    }
+
+    private void InvalidateAppliedStyle()
+    {
+        _appliedCenterColorHex = null;
+        _appliedCenterSize = -1;
+        _appliedCenterOpacity = -1f;
+        _appliedOutlineColorHex = null;
+        _appliedOutlineSize = -1;
+        _appliedOutlineOpacity = -1f;
+        _appliedOutlineSpacing = -1f;
+        _appliedCenterShape = null;
+        _appliedOutlineShape = null;
+        _appliedBlinkAmount = -1f;
+        _appliedCenterClearance = false;
     }
 
     /// <summary>
@@ -1021,6 +1158,11 @@ internal class CrosshairOverlay : MonoBehaviour
         var outlineSpacing = Mathf.Clamp(OutlineSpacing.Value, 0f, 32f);
         var outlineShape = ParseShape(OutlineShape.Value);
         var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
+        var centerClearance = HoldingPackOrItem();
+        var blinkAmount = AutoAttackBlinkAmount();
+        var thicknessIncrease = Mathf.Clamp(AutoAttackBlinkThicknessIncrease.Value, 0f, 200f) * 0.01f;
+        centerThickness = NormalizedShapeThickness(centerThickness * (1f + thicknessIncrease * blinkAmount));
+        outlineThickness = NormalizedShapeThickness(outlineThickness * (1f + thicknessIncrease * blinkAmount));
         var spritesChanged = RefreshCrosshairShapeSprites(centerThickness, outlineThickness);
         if (!spritesChanged
             && hex == _appliedCenterColorHex
@@ -1031,7 +1173,9 @@ internal class CrosshairOverlay : MonoBehaviour
             && outlineSize == _appliedOutlineSize
             && Mathf.Approximately(outlineOpacity, _appliedOutlineOpacity)
             && Mathf.Approximately(outlineSpacing, _appliedOutlineSpacing)
-            && outlineShape == _appliedOutlineShape)
+            && outlineShape == _appliedOutlineShape
+            && Mathf.Approximately(blinkAmount, _appliedBlinkAmount)
+            && centerClearance == _appliedCenterClearance)
             return;
 
         _appliedCenterColorHex = hex;
@@ -1043,12 +1187,20 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedOutlineOpacity = outlineOpacity;
         _appliedOutlineSpacing = outlineSpacing;
         _appliedOutlineShape = outlineShape;
+        _appliedBlinkAmount = blinkAmount;
+        _appliedCenterClearance = centerClearance;
 
         var color = ParseColor(hex);
         color.a *= opacity;
         var outline = ParseColor(outlineHex, new Color(1f, 0.2f, 0.333f, 1f));
         outline.a *= outlineOpacity;
-        var visibleCenterSize = VisibleCenterSize(size);
+        if (blinkAmount > 0f)
+        {
+            var blink = ParseColor(AutoAttackBlinkColorHex.Value, new Color(1f, 0.165f, 0.165f, 1f));
+            blink.a = outline.a;
+            outline = Color.Lerp(outline, blink, blinkAmount);
+        }
+        var visibleCenterSize = VisibleCenterSize(size, centerClearance);
         var visibleOutlineSize = VisibleOutlineSize(
             outlineSize,
             visibleCenterSize,
@@ -1059,9 +1211,43 @@ internal class CrosshairOverlay : MonoBehaviour
         SetSprite(_centerShape, color, visibleCenterSize);
     }
 
-    private static float VisibleCenterSize(float configuredSize)
+    private static float VisibleCenterSize(float configuredSize, bool centerClearance)
     {
-        return Mathf.Max(configuredSize, MinimumCenterShapeSize);
+        var size = Mathf.Max(configuredSize, MinimumCenterShapeSize);
+        if (centerClearance)
+            size += HeldItemCenterClearance;
+        return size;
+    }
+
+    private static bool HoldingPackOrItem()
+    {
+        if (!TryGetWieldedSlot(out var slot))
+            return false;
+
+        return slot is InventorySlot.ResourcePack
+            or InventorySlot.Consumable
+            or InventorySlot.ConsumableHeavy
+            or InventorySlot.InPocket
+            or InventorySlot.InLevelCarry
+            or InventorySlot.Pickup;
+    }
+
+    private static bool TryGetWieldedSlot(out InventorySlot slot)
+    {
+        slot = InventorySlot.None;
+        if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+            return false;
+
+        var holder = player!.FPItemHolder;
+        if (!Alive(holder))
+            return false;
+
+        var item = holder!.WieldedItem;
+        if (!Alive(item) || !Alive(item!.ItemDataBlock))
+            return false;
+
+        slot = item.ItemDataBlock!.inventorySlot;
+        return true;
     }
 
     private static float VisibleOutlineSize(
@@ -1277,7 +1463,9 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private float CurrentCrosshairDiameter()
     {
-        var visibleCenterSize = VisibleCenterSize(Mathf.Clamp(CenterSize.Value, 1, 32));
+        var visibleCenterSize = VisibleCenterSize(
+            Mathf.Clamp(CenterSize.Value, 1, 32),
+            HoldingPackOrItem());
         var visibleOutlineSize = VisibleOutlineSize(
             Mathf.Clamp(OutlineSize.Value, 1, 64),
             visibleCenterSize,

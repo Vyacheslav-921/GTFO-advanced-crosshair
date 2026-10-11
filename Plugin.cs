@@ -37,6 +37,7 @@ public class Plugin : BasePlugin
 
         // AddComponent attaches a Unity MonoBehaviour to the plugin's GameObject.
         CrosshairOverlay.Bind(Config);
+        PackHintOverlay.Bind(Config);
         AddComponent<CrosshairOverlay>();
         Log.LogInfo("Crosshair overlay ready (awaits player HUD).");
 
