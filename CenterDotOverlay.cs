@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using BepInEx.Configuration;
 using FirstPersonItem;
 using GameData;
@@ -11,7 +12,6 @@ namespace V921;
 
 internal enum ReticleShape
 {
-    Dot,
     TwoDots,
     Arcs,
     Circle,
@@ -44,18 +44,18 @@ internal enum ReticleShape
 /// </summary>
 internal class CenterDotOverlay : MonoBehaviour
 {
-    private const int TextureSize = 16;
-
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<bool> HideWhenScoped { get; private set; } = null!;
     public static ConfigEntry<bool> FollowRecoil { get; private set; } = null!;
     public static ConfigEntry<string> Shape { get; private set; } = null!;
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
+    public static ConfigEntry<float> CenterThickness { get; private set; } = null!;
     public static ConfigEntry<float> Opacity { get; private set; } = null!;
     public static ConfigEntry<string> OutlineShape { get; private set; } = null!;
     public static ConfigEntry<string> OutlineColorHex { get; private set; } = null!;
     public static ConfigEntry<int> OutlineSize { get; private set; } = null!;
+    public static ConfigEntry<float> OutlineThickness { get; private set; } = null!;
     public static ConfigEntry<float> OutlineOpacity { get; private set; } = null!;
     public static ConfigEntry<float> OutlineSpacing { get; private set; } = null!;
     public static ConfigEntry<bool> HintEnabled { get; private set; } = null!;
@@ -63,7 +63,9 @@ internal class CenterDotOverlay : MonoBehaviour
     public static ConfigEntry<string> HintShape { get; private set; } = null!;
     public static ConfigEntry<string> HintColorHex { get; private set; } = null!;
     public static ConfigEntry<string> HintAutoAttackColorHex { get; private set; } = null!;
+    public static ConfigEntry<float> HintAutoAttackThicknessIncrease { get; private set; } = null!;
     public static ConfigEntry<int> HintSize { get; private set; } = null!;
+    public static ConfigEntry<float> HintThickness { get; private set; } = null!;
     public static ConfigEntry<float> HintOpacity { get; private set; } = null!;
 
     /// <summary>
@@ -87,15 +89,19 @@ internal class CenterDotOverlay : MonoBehaviour
     private UI_Sprite? _outline;
     private UI_Sprite? _dot;
     private UI_Sprite? _hint;
-    private Sprite? _solidDotSprite;
-    private Sprite? _crosshairDotsSprite;
-    private Sprite? _crosshairArcsSprite;
-    private Sprite? _crosshairLinesSprite;
-    private Sprite? _crosshairCircleSprite;
+    private Sprite? _centerDotsSprite;
+    private Sprite? _centerArcsSprite;
+    private Sprite? _centerLinesSprite;
+    private Sprite? _centerCircleSprite;
+    private Sprite? _outlineDotsSprite;
+    private Sprite? _outlineArcsSprite;
+    private Sprite? _outlineLinesSprite;
+    private Sprite? _outlineCircleSprite;
     private Sprite? _hintDotsSprite;
     private Sprite? _hintArcsSprite;
     private Sprite? _hintLinesSprite;
     private Sprite? _hintCircleSprite;
+    private readonly Dictionary<int, Sprite?[]> _hintShapeCache = new();
     private float _nextCreateAttempt;
     private string? _appliedHex;
     private int _appliedSize = -1;
@@ -104,6 +110,9 @@ internal class CenterDotOverlay : MonoBehaviour
     private int _appliedOutlineSize = -1;
     private float _appliedOutlineOpacity = -1f;
     private float _appliedOutlineSpacing = -1f;
+    private float _appliedCenterThickness = -1f;
+    private float _appliedOutlineThickness = -1f;
+    private float _appliedHintThickness = -1f;
     private ReticleShape? _appliedShape;
     private ReticleShape? _appliedOutlineShape;
     private bool _stateErrorLogged;
@@ -142,61 +151,77 @@ internal class CenterDotOverlay : MonoBehaviour
         Shape = config.Bind(
             "1 - Center",
             "Shape",
-            "Dot",
+            "Circle",
             new ConfigDescription(
                 "Center shape.",
-                new AcceptableValueList<string>("Dot", "Two dots", "Arcs", "Circle", "Lines")));
+                new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
 
         ColorHex = config.Bind(
             "1 - Center",
             "Color",
             "5eb18e",
-            "Dot color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            "Center color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         Size = config.Bind(
             "1 - Center",
             "Size",
             3,
             new ConfigDescription(
-                "Colored dot diameter in HUD units. A dark ring and the outline are drawn behind it.",
+                "Center shape diameter in HUD units. A dark contrast layer and the outline are drawn behind it.",
                 new AcceptableValueRange<int>(1, 32)));
+
+        CenterThickness = config.Bind(
+            "1 - Center",
+            "Thickness",
+            4.5f,
+            new ConfigDescription(
+                "Center shape thickness. For Two dots, this controls dot size.",
+                new AcceptableValueRange<float>(0.5f, 16f)));
 
         Opacity = config.Bind(
             "1 - Center",
             "Opacity",
             0.9f,
             new ConfigDescription(
-                "Dot opacity. 0 is invisible, 1 is solid.",
+                "Center opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
 
         OutlineShape = config.Bind(
             "2 - Outline",
             "Shape",
-            "Dot",
+            "Circle",
             new ConfigDescription(
                 "Outline shape.",
-                new AcceptableValueList<string>("Dot", "Two dots", "Arcs", "Circle", "Lines")));
+                new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
 
         OutlineColorHex = config.Bind(
             "2 - Outline",
             "Color",
             "b00a22",
-            "Outer ring color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            "Outline color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         OutlineSize = config.Bind(
             "2 - Outline",
             "Size",
             9,
             new ConfigDescription(
-                "Outer ring diameter in HUD units. Larger than the dot size, so the ring stays visible around the fill.",
+                "Outline shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 64)));
+
+        OutlineThickness = config.Bind(
+            "2 - Outline",
+            "Thickness",
+            4.5f,
+            new ConfigDescription(
+                "Outline shape thickness. For Two dots, this controls dot size.",
+                new AcceptableValueRange<float>(0.5f, 16f)));
 
         OutlineOpacity = config.Bind(
             "2 - Outline",
             "Opacity",
             0.8f,
             new ConfigDescription(
-                "Outer ring opacity. 0 is invisible, 1 is solid.",
+                "Outline opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
 
         OutlineSpacing = config.Bind(
@@ -204,7 +229,7 @@ internal class CenterDotOverlay : MonoBehaviour
             "Spacing",
             3f,
             new ConfigDescription(
-                "Radial distance from the center shape. Applies to every outline shape except Dot.",
+                "Radial distance from the center shape.",
                 new AcceptableValueRange<float>(0f, 32f)));
 
         HintEnabled = config.Bind(
@@ -222,7 +247,7 @@ internal class CenterDotOverlay : MonoBehaviour
         HintShape = config.Bind(
             "3 - Hint",
             "Shape",
-            "Circle",
+            "Arcs",
             new ConfigDescription(
                 "Melee charge hint shape.",
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
@@ -239,18 +264,34 @@ internal class CenterDotOverlay : MonoBehaviour
             "ffffff",
             "Hint color as an automatic melee attack approaches, as RRGGBB or RRGGBBAA.");
 
+        HintAutoAttackThicknessIncrease = config.Bind(
+            "3 - Hint",
+            "Auto attack thickness increase",
+            75f,
+            new ConfigDescription(
+                "Percentage by which hint thickness grows as an automatic melee attack approaches.",
+                new AcceptableValueRange<float>(0f, 200f)));
+
         HintSize = config.Bind(
             "3 - Hint",
             "Size",
-            24,
+            30,
             new ConfigDescription(
                 "Starting diameter of the melee charge hint, in HUD units.",
                 new AcceptableValueRange<int>(8, 64)));
 
+        HintThickness = config.Bind(
+            "3 - Hint",
+            "Thickness",
+            1.25f,
+            new ConfigDescription(
+                "Hint shape thickness. For Two dots, this controls dot size.",
+                new AcceptableValueRange<float>(0.5f, 16f)));
+
         HintOpacity = config.Bind(
             "3 - Hint",
             "Opacity",
-            0.9f,
+            0.8f,
             new ConfigDescription(
                 "Hint opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
@@ -628,16 +669,23 @@ internal class CenterDotOverlay : MonoBehaviour
         {
             var reference = HudSprite();
             var layer = reference != null ? reference.gameObject.layer : parent.gameObject.layer;
-            var sprite = CircleSprite();
-            _solidDotSprite = sprite;
-            _crosshairDotsSprite = ShapeSprite(ReticleShape.TwoDots, true);
-            _crosshairArcsSprite = ShapeSprite(ReticleShape.Arcs, true);
-            _crosshairLinesSprite = ShapeSprite(ReticleShape.Lines, true);
-            _crosshairCircleSprite = ShapeSprite(ReticleShape.Circle, true);
-            _hintDotsSprite = ShapeSprite(ReticleShape.TwoDots, false);
-            _hintArcsSprite = ShapeSprite(ReticleShape.Arcs, false);
-            _hintLinesSprite = ShapeSprite(ReticleShape.Lines, false);
-            _hintCircleSprite = ShapeSprite(ReticleShape.Circle, false);
+            var centerThickness = Mathf.Clamp(CenterThickness.Value, 0.5f, 16f);
+            var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
+            var hintThickness = Mathf.Clamp(HintThickness.Value, 0.5f, 16f);
+            CreateShapeSet(
+                centerThickness,
+                out _centerDotsSprite,
+                out _centerArcsSprite,
+                out _centerCircleSprite,
+                out _centerLinesSprite);
+            CreateShapeSet(
+                outlineThickness,
+                out _outlineDotsSprite,
+                out _outlineArcsSprite,
+                out _outlineCircleSprite,
+                out _outlineLinesSprite);
+            ApplyHintThickness(hintThickness);
+            var sprite = _centerCircleSprite!;
 
             root = new GameObject("GTFO Center Aim Dot");
             var rect = root.AddComponent<RectTransform>();
@@ -674,6 +722,8 @@ internal class CenterDotOverlay : MonoBehaviour
             _appliedOutlineSize = -1;
             _appliedOutlineOpacity = -1f;
             _appliedOutlineSpacing = -1f;
+            _appliedCenterThickness = centerThickness;
+            _appliedOutlineThickness = outlineThickness;
             _appliedShape = null;
             _appliedOutlineShape = null;
             ApplyStyle();
@@ -689,11 +739,14 @@ internal class CenterDotOverlay : MonoBehaviour
             _outline = null;
             _dot = null;
             _hint = null;
-            _solidDotSprite = null;
-            _crosshairDotsSprite = null;
-            _crosshairArcsSprite = null;
-            _crosshairLinesSprite = null;
-            _crosshairCircleSprite = null;
+            _centerDotsSprite = null;
+            _centerArcsSprite = null;
+            _centerLinesSprite = null;
+            _centerCircleSprite = null;
+            _outlineDotsSprite = null;
+            _outlineArcsSprite = null;
+            _outlineLinesSprite = null;
+            _outlineCircleSprite = null;
             _hintDotsSprite = null;
             _hintArcsSprite = null;
             _hintLinesSprite = null;
@@ -718,11 +771,14 @@ internal class CenterDotOverlay : MonoBehaviour
         _outline = null;
         _dot = null;
         _hint = null;
-        _solidDotSprite = null;
-        _crosshairDotsSprite = null;
-        _crosshairArcsSprite = null;
-        _crosshairLinesSprite = null;
-        _crosshairCircleSprite = null;
+        _centerDotsSprite = null;
+        _centerArcsSprite = null;
+        _centerLinesSprite = null;
+        _centerCircleSprite = null;
+        _outlineDotsSprite = null;
+        _outlineArcsSprite = null;
+        _outlineLinesSprite = null;
+        _outlineCircleSprite = null;
         _hintDotsSprite = null;
         _hintArcsSprite = null;
         _hintLinesSprite = null;
@@ -735,6 +791,9 @@ internal class CenterDotOverlay : MonoBehaviour
         _appliedOutlineSize = -1;
         _appliedOutlineOpacity = -1f;
         _appliedOutlineSpacing = -1f;
+        _appliedCenterThickness = -1f;
+        _appliedOutlineThickness = -1f;
+        _appliedHintThickness = -1f;
         _appliedShape = null;
         _appliedOutlineShape = null;
         _hintChargeActive = false;
@@ -815,44 +874,28 @@ internal class CenterDotOverlay : MonoBehaviour
         }
     }
 
-    private static Sprite CircleSprite()
+    private static void CreateShapeSet(
+        float thickness,
+        out Sprite? dots,
+        out Sprite? arcs,
+        out Sprite? circle,
+        out Sprite? lines)
     {
-        var tex = new Texture2D(TextureSize, TextureSize, TextureFormat.RGBA32, false);
-        var center = (TextureSize - 1) * 0.5f;
-        var radius = TextureSize * 0.5f;
-
-        for (var y = 0; y < TextureSize; y++)
-        {
-            for (var x = 0; x < TextureSize; x++)
-            {
-                var distance = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
-                var alpha = Mathf.Clamp01(radius - distance);
-                tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
-            }
-        }
-
-        tex.Apply();
-        tex.filterMode = FilterMode.Point;
-        tex.wrapMode = TextureWrapMode.Clamp;
-        tex.hideFlags = HideFlags.HideAndDontSave;
-
-        var sprite = Sprite.Create(
-            tex,
-            new Rect(0f, 0f, TextureSize, TextureSize),
-            new Vector2(0.5f, 0.5f),
-            TextureSize);
-        sprite.hideFlags = HideFlags.HideAndDontSave;
-        return sprite;
+        dots = ShapeSprite(ReticleShape.TwoDots, thickness);
+        arcs = ShapeSprite(ReticleShape.Arcs, thickness);
+        circle = ShapeSprite(ReticleShape.Circle, thickness);
+        lines = ShapeSprite(ReticleShape.Lines, thickness);
     }
 
-    private static Sprite ShapeSprite(ReticleShape shape, bool compact)
+    private static Sprite ShapeSprite(ReticleShape shape, float configuredThickness)
     {
-        const int textureSize = 32;
-        var thickness = compact ? 4.5f : 1.25f;
-        var dotRadius = compact ? 6f : 2.25f;
+        const int textureSize = 64;
+        const float resolutionScale = textureSize / 32f;
+        var thickness = Mathf.Clamp(configuredThickness, 0.5f, 16f) * resolutionScale;
+        var dotRadius = Mathf.Clamp(thickness * 1.33f, resolutionScale, 7f * resolutionScale);
         var tex = new Texture2D(textureSize, textureSize, TextureFormat.RGBA32, false);
         var center = (textureSize - 1) * 0.5f;
-        var radius = textureSize * 0.5f - 1f;
+        var radius = textureSize * 0.5f - resolutionScale;
         var dotOffset = radius - dotRadius;
 
         for (var y = 0; y < textureSize; y++)
@@ -862,7 +905,10 @@ internal class CenterDotOverlay : MonoBehaviour
                 var dx = x - center;
                 var dy = y - center;
                 var distance = Mathf.Sqrt(dx * dx + dy * dy);
-                var ringAlpha = Mathf.Clamp01(thickness - Mathf.Abs(distance - radius));
+                var distanceInsideEdge = radius - distance;
+                var outerAlpha = Mathf.Clamp01(distanceInsideEdge + 0.5f);
+                var innerAlpha = Mathf.Clamp01(thickness - distanceInsideEdge);
+                var ringAlpha = outerAlpha * innerAlpha;
                 float alpha;
 
                 switch (shape)
@@ -873,7 +919,9 @@ internal class CenterDotOverlay : MonoBehaviour
                         alpha = Mathf.Clamp01(dotRadius + 0.5f - Mathf.Min(leftDistance, rightDistance));
                         break;
                     case ReticleShape.Arcs:
-                        var arcCutoff = compact ? 0.52f : 0.68f;
+                        var thicknessProgress = Mathf.Clamp01(
+                            (thickness / resolutionScale - 1.25f) / 3.25f);
+                        var arcCutoff = Mathf.Lerp(0.68f, 0.52f, thicknessProgress);
                         alpha = ringAlpha * Mathf.Clamp01(Mathf.Abs(dx) - radius * arcCutoff);
                         break;
                     case ReticleShape.Lines:
@@ -902,7 +950,9 @@ internal class CenterDotOverlay : MonoBehaviour
             tex,
             new Rect(0f, 0f, textureSize, textureSize),
             new Vector2(0.5f, 0.5f),
-            textureSize);
+            textureSize,
+            0,
+            SpriteMeshType.FullRect);
         sprite.hideFlags = HideFlags.HideAndDontSave;
         return sprite;
     }
@@ -916,12 +966,16 @@ internal class CenterDotOverlay : MonoBehaviour
         var size = Mathf.Clamp(Size.Value, 1, 32);
         var opacity = Mathf.Clamp01(Opacity.Value);
         var shape = ParseShape(Shape.Value);
+        var centerThickness = Mathf.Clamp(CenterThickness.Value, 0.5f, 16f);
         var outlineHex = OutlineColorHex.Value;
         var outlineSize = Mathf.Clamp(OutlineSize.Value, 1, 64);
         var outlineOpacity = Mathf.Clamp01(OutlineOpacity.Value);
         var outlineSpacing = Mathf.Clamp(OutlineSpacing.Value, 0f, 32f);
         var outlineShape = ParseShape(OutlineShape.Value);
-        if (hex == _appliedHex
+        var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
+        var spritesChanged = RefreshCrosshairShapeSprites(centerThickness, outlineThickness);
+        if (!spritesChanged
+            && hex == _appliedHex
             && size == _appliedSize
             && Mathf.Approximately(opacity, _appliedOpacity)
             && shape == _appliedShape
@@ -946,49 +1000,111 @@ internal class CenterDotOverlay : MonoBehaviour
         color.a *= opacity;
         var outline = ParseColor(outlineHex, new Color(1f, 0.2f, 0.333f, 1f));
         outline.a *= outlineOpacity;
-        var visibleCenterSize = VisibleCenterSize(size, shape);
+        var visibleCenterSize = VisibleCenterSize(size);
         var visibleOutlineSize = VisibleOutlineSize(
             outlineSize,
-            outlineShape,
             visibleCenterSize,
             outlineSpacing);
-        SetRendererSprite(_halo, SelectedCrosshairSprite(outlineShape));
-        SetRendererSprite(_outline, SelectedCrosshairSprite(shape));
-        SetRendererSprite(_dot, SelectedCrosshairSprite(shape));
+        SetRendererSprite(_halo, SelectedOutlineSprite(outlineShape));
+        SetRendererSprite(_outline, SelectedCenterSprite(shape));
+        SetRendererSprite(_dot, SelectedCenterSprite(shape));
         SetSprite(_halo, outline, visibleOutlineSize);
         SetSprite(_outline, new Color(0f, 0f, 0f, opacity), visibleCenterSize + 3f);
         SetSprite(_dot, color, visibleCenterSize);
     }
 
-    private static float VisibleCenterSize(float configuredSize, ReticleShape shape)
+    private static float VisibleCenterSize(float configuredSize)
     {
-        return shape == ReticleShape.Dot
-            ? configuredSize
-            : Mathf.Max(configuredSize, MinimumCenterPatternSize);
+        return Mathf.Max(configuredSize, MinimumCenterPatternSize);
     }
 
     private static float VisibleOutlineSize(
         float configuredSize,
-        ReticleShape shape,
         float visibleCenterSize,
         float spacing)
     {
-        if (shape == ReticleShape.Dot)
-            return Mathf.Max(configuredSize, visibleCenterSize + 6f);
-
         var readableSize = Mathf.Max(configuredSize, MinimumOutlinePatternSize);
         return Mathf.Max(readableSize, visibleCenterSize + spacing * 2f);
     }
 
-    private Sprite? SelectedCrosshairSprite(ReticleShape shape)
+    private bool RefreshCrosshairShapeSprites(float centerThickness, float outlineThickness)
+    {
+        var changed = false;
+        if (!Mathf.Approximately(centerThickness, _appliedCenterThickness))
+        {
+            CreateShapeSet(
+                centerThickness,
+                out _centerDotsSprite,
+                out _centerArcsSprite,
+                out _centerCircleSprite,
+                out _centerLinesSprite);
+            _appliedCenterThickness = centerThickness;
+            changed = true;
+        }
+
+        if (!Mathf.Approximately(outlineThickness, _appliedOutlineThickness))
+        {
+            CreateShapeSet(
+                outlineThickness,
+                out _outlineDotsSprite,
+                out _outlineArcsSprite,
+                out _outlineCircleSprite,
+                out _outlineLinesSprite);
+            _appliedOutlineThickness = outlineThickness;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private void ApplyHintThickness(float thickness)
+    {
+        thickness = Mathf.Round(Mathf.Clamp(thickness, 0.5f, 16f) * 4f) * 0.25f;
+        if (Mathf.Approximately(thickness, _appliedHintThickness))
+            return;
+
+        var cacheKey = Mathf.RoundToInt(thickness * 4f);
+        if (_hintShapeCache.TryGetValue(cacheKey, out var sprites))
+        {
+            _hintDotsSprite = sprites[0];
+            _hintArcsSprite = sprites[1];
+            _hintCircleSprite = sprites[2];
+            _hintLinesSprite = sprites[3];
+        }
+        else
+        {
+            CreateShapeSet(
+                thickness,
+                out _hintDotsSprite,
+                out _hintArcsSprite,
+                out _hintCircleSprite,
+                out _hintLinesSprite);
+            _hintShapeCache[cacheKey] =
+                new[] { _hintDotsSprite, _hintArcsSprite, _hintCircleSprite, _hintLinesSprite };
+        }
+
+        _appliedHintThickness = thickness;
+    }
+
+    private Sprite? SelectedCenterSprite(ReticleShape shape)
     {
         return shape switch
         {
-            ReticleShape.TwoDots => _crosshairDotsSprite,
-            ReticleShape.Arcs => _crosshairArcsSprite,
-            ReticleShape.Circle => _crosshairCircleSprite,
-            ReticleShape.Lines => _crosshairLinesSprite,
-            _ => _solidDotSprite
+            ReticleShape.TwoDots => _centerDotsSprite,
+            ReticleShape.Arcs => _centerArcsSprite,
+            ReticleShape.Lines => _centerLinesSprite,
+            _ => _centerCircleSprite
+        };
+    }
+
+    private Sprite? SelectedOutlineSprite(ReticleShape shape)
+    {
+        return shape switch
+        {
+            ReticleShape.TwoDots => _outlineDotsSprite,
+            ReticleShape.Arcs => _outlineArcsSprite,
+            ReticleShape.Lines => _outlineLinesSprite,
+            _ => _outlineCircleSprite
         };
     }
 
@@ -1055,12 +1171,15 @@ internal class CenterDotOverlay : MonoBehaviour
             ? targetSize
             : Mathf.Lerp(targetSize, readySize, progress);
         var color = ConfiguredHintColor();
+        var easedWarning = autoStrikeWarningProgress * autoStrikeWarningProgress;
+        var baseThickness = Mathf.Clamp(HintThickness.Value, 0.5f, 16f);
+        var thicknessIncrease = Mathf.Clamp(HintAutoAttackThicknessIncrease.Value, 0f, 200f) * 0.01f;
+        ApplyHintThickness(baseThickness * (1f + thicknessIncrease * easedWarning));
         var renderer = _hint?.m_sprite;
         if (renderer != null)
             renderer.sprite = SelectedHintSprite();
         if (autoStrikeWarningProgress > 0f)
         {
-            var easedWarning = autoStrikeWarningProgress * autoStrikeWarningProgress;
             var autoAttackColor = ParseColor(HintAutoAttackColorHex.Value, Color.white);
             autoAttackColor.a *= Mathf.Clamp01(HintOpacity.Value);
             color = Color.Lerp(color, autoAttackColor, easedWarning);
@@ -1070,6 +1189,7 @@ internal class CenterDotOverlay : MonoBehaviour
 
     private void ShowHintAtOriginalSize()
     {
+        ApplyHintThickness(Mathf.Clamp(HintThickness.Value, 0.5f, 16f));
         var renderer = _hint?.m_sprite;
         if (renderer != null)
             renderer.sprite = SelectedHintSprite();
@@ -1086,12 +1206,9 @@ internal class CenterDotOverlay : MonoBehaviour
 
     private float CurrentCrosshairDiameter()
     {
-        var centerShape = ParseShape(Shape.Value);
-        var outlineShape = ParseShape(OutlineShape.Value);
-        var visibleCenterSize = VisibleCenterSize(Mathf.Clamp(Size.Value, 1, 32), centerShape);
+        var visibleCenterSize = VisibleCenterSize(Mathf.Clamp(Size.Value, 1, 32));
         var visibleOutlineSize = VisibleOutlineSize(
             Mathf.Clamp(OutlineSize.Value, 1, 64),
-            outlineShape,
             visibleCenterSize,
             Mathf.Clamp(OutlineSpacing.Value, 0f, 32f));
         return Mathf.Max(visibleOutlineSize, visibleCenterSize + 3f);
@@ -1123,7 +1240,7 @@ internal class CenterDotOverlay : MonoBehaviour
             "Arcs" => ReticleShape.Arcs,
             "Circle" => ReticleShape.Circle,
             "Lines" => ReticleShape.Lines,
-            _ => ReticleShape.Dot
+            _ => ReticleShape.Circle
         };
     }
 
