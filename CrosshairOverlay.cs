@@ -97,6 +97,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private readonly PackHintOverlay _packHints = new();
     private readonly ItemHintOverlay _itemHints = new();
     private readonly ToolHintOverlay _toolHints = new();
+    private readonly ScopeAmmoOverlay _scopeAmmo = new();
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -386,12 +387,15 @@ internal class CrosshairOverlay : MonoBehaviour
         var showCrosshair = ShouldShow();
         var hintParent = _rect;
         var hintLayer = _rect != null ? _rect.gameObject.layer : 0;
-        var inHudContext = InHudContext();
+        var inLevel = InLevelFps();
+        var scoped = inLevel && AimingThroughScope();
+        var inHudContext = inLevel && (!HideWhenScoped.Value || !scoped);
         var crosshairDiameter = CurrentCrosshairDiameter();
         var showPackHint = _packHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
         var showItemHint = _itemHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
         var showToolHint = _toolHints.Update(hintParent, hintLayer, inHudContext);
-        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint;
+        var showScopeAmmo = _scopeAmmo.Update(hintParent, hintLayer, scoped);
+        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo;
         if (showCrosshair)
         {
             if (!_crosshairShapesActive)
@@ -666,15 +670,17 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private bool InHudContext()
     {
+        return InLevelFps() && (!HideWhenScoped.Value || !AimingThroughScope());
+    }
+
+    private bool InLevelFps()
+    {
         try
         {
             if (GameStateManager.CurrentStateName != eGameStateName.InLevel)
                 return false;
 
-            if (FocusStateManager.CurrentState != eFocusState.FPS)
-                return false;
-
-            return !HideWhenScoped.Value || !AimingThroughScope();
+            return FocusStateManager.CurrentState == eFocusState.FPS;
         }
         catch (Exception ex)
         {
@@ -964,6 +970,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _packHints.Detach();
         _itemHints.Detach();
         _toolHints.Detach();
+        _scopeAmmo.Detach();
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)
