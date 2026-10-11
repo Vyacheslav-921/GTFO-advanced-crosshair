@@ -8,3 +8,6 @@ local.props
 *.dll
 *.pdb
 *.deps.json
+
+# Generated index of BepInEx interop assemblies. See .cursor/rules/gtfo-game-ref.mdc.
+_ref/

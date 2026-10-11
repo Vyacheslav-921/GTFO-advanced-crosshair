@@ -95,6 +95,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private UI_Sprite? _outlineShape;
     private UI_Sprite? _hintShape;
     private readonly PackHintOverlay _packHints = new();
+    private readonly ItemHintOverlay _itemHints = new();
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -202,7 +203,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterSize = config.Bind(
             "2 - Center",
             "Size",
-            6,
+            22,
             new ConfigDescription(
                 "Center shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 32)));
@@ -210,7 +211,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterThickness = config.Bind(
             "2 - Center",
             "Thickness",
-            4.95f,
+            2.95f,
             new ConfigDescription(
                 "Center shape thickness. For Two dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
@@ -254,7 +255,7 @@ internal class CrosshairOverlay : MonoBehaviour
         OutlineSize = config.Bind(
             "3 - Outline",
             "Size",
-            14,
+            32,
             new ConfigDescription(
                 "Outline shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 64)));
@@ -262,7 +263,7 @@ internal class CrosshairOverlay : MonoBehaviour
         OutlineThickness = config.Bind(
             "3 - Outline",
             "Thickness",
-            4.95f,
+            3.95f,
             new ConfigDescription(
                 "Outline shape thickness. For Two dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
@@ -326,7 +327,7 @@ internal class CrosshairOverlay : MonoBehaviour
         HintSize = config.Bind(
             "4 - Hint",
             "Size",
-            70,
+            78,
             new ConfigDescription(
                 "Starting diameter of the melee charge hint, in HUD units.",
                 new AcceptableValueRange<int>(8, 64)));
@@ -381,12 +382,13 @@ internal class CrosshairOverlay : MonoBehaviour
         }
 
         var showCrosshair = ShouldShow();
-        var showPackHint = _packHints.Update(
-            _rect,
-            _rect != null ? _rect.gameObject.layer : 0,
-            InHudContext(),
-            CurrentCrosshairDiameter());
-        var showRoot = showCrosshair || showPackHint;
+        var hintParent = _rect;
+        var hintLayer = _rect != null ? _rect.gameObject.layer : 0;
+        var inHudContext = InHudContext();
+        var crosshairDiameter = CurrentCrosshairDiameter();
+        var showPackHint = _packHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
+        var showItemHint = _itemHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
+        var showRoot = showCrosshair || showPackHint || showItemHint;
         if (showCrosshair)
         {
             if (!_crosshairShapesActive)
@@ -953,6 +955,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _autoAttackBlinkChargePtr = IntPtr.Zero;
         _autoAttackBlinkTriggers = 0;
         _packHints.Detach();
+        _itemHints.Detach();
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)

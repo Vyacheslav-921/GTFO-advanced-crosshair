@@ -17,14 +17,14 @@ internal sealed class PackHintOverlay
     public static ConfigEntry<int> Size { get; private set; } = null!;
     public static ConfigEntry<float> Margin { get; private set; } = null!;
     public static ConfigEntry<string> ToolColorHex { get; private set; } = null!;
-    public static ConfigEntry<string> HealthColorHex { get; private set; } = null!;
+    public static ConfigEntry<string> MedColorHex { get; private set; } = null!;
     public static ConfigEntry<string> AmmoColorHex { get; private set; } = null!;
     public static ConfigEntry<string> DisinfColorHex { get; private set; } = null!;
 
     private const float TmpPointsPerHudUnit = 10f;
-    private const float NamingSizeScale = 1.5f;
+    private const float NamingSizeScale = 1.2f;
     private const float CapacitySizeScale = 1.1f;
-    private const float ColorSaturationBoost = 1.3f;
+    private const float ColorSaturationBoost = 1.1f;
 
     private TextMeshPro? _namingText;
     private TextMeshPro? _capacityText;
@@ -54,7 +54,7 @@ internal sealed class PackHintOverlay
         Margin = config.Bind(
             "5 - Packs Hints",
             "Margin",
-            6f,
+            7.8f,
             new ConfigDescription(
                 "Distance from the crosshair's outer edge to the pack naming hint. Capacity hint stays at the center.",
                 new AcceptableValueRange<float>(0f, 48f)));
@@ -65,10 +65,10 @@ internal sealed class PackHintOverlay
             "6eccff",
             "TOOL pack hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
-        HealthColorHex = config.Bind(
+        MedColorHex = config.Bind(
             "5 - Packs Hints",
-            "HP color",
-            "e0d489",
+            "Medpack color",
+            "ff7893",
             "HP pack hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         AmmoColorHex = config.Bind(
@@ -280,8 +280,8 @@ internal sealed class PackHintOverlay
                 naming = "TOOL";
                 return true;
             case eResourceContainerSpawnType.Health:
-                colorHex = HealthColorHex.Value;
-                color = ParseColor(colorHex, new Color(0.878f, 0.831f, 0.537f, 1f));
+                colorHex = MedColorHex.Value;
+                color = ParseColor(colorHex, new Color(1f, 0.470588f, 0.576471f, 1f));
                 naming = "HP";
                 return true;
             case eResourceContainerSpawnType.AmmoWeapon:

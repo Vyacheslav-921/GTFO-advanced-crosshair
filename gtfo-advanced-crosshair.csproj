@@ -30,5 +30,7 @@
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Patches\" />
+    <Compile Remove="tools/**" />
+    <Compile Remove="obj/**" />
   </ItemGroup>
 </Project>
