@@ -32,9 +32,8 @@ internal enum ReticleShape
 /// the sway rest position. Shotguns stay centered: their pellets follow the camera.
 ///
 /// The crosshair has three parts from the center outward: Center, Outline, and Hint.
-/// Center includes a dark backing so it remains readable against similarly colored rooms.
 ///
-/// A melee charge draws a configurable red shape at its configured diameter, then shrinks it
+/// A melee charge draws a configurable shape, then shrinks it
 /// to the crosshair's outer edge as <see cref="MWS_ChargeUp.m_elapsed"/> reaches full damage.
 ///
 /// Shown only when all of these are true:
@@ -86,7 +85,6 @@ internal class CrosshairOverlay : MonoBehaviour
     private Vector2 _restAnchored;
     private IntPtr _parentPtr;
     private UI_Sprite? _centerShape;
-    private UI_Sprite? _centerBackingShape;
     private UI_Sprite? _outlineShape;
     private UI_Sprite? _hintShape;
     private Sprite? _centerDotsSprite;
@@ -151,7 +149,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterShape = config.Bind(
             "1 - Center",
             "Shape",
-            "Circle",
+            "Arcs",
             new ConfigDescription(
                 "Center shape.",
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
@@ -167,7 +165,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Size",
             3,
             new ConfigDescription(
-                "Center shape diameter in HUD units. Center's dark backing and Outline are drawn behind it.",
+                "Center shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 32)));
 
         CenterThickness = config.Bind(
@@ -189,7 +187,7 @@ internal class CrosshairOverlay : MonoBehaviour
         OutlineShape = config.Bind(
             "2 - Outline",
             "Shape",
-            "Circle",
+            "Arcs",
             new ConfigDescription(
                 "Outline shape.",
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
@@ -261,13 +259,13 @@ internal class CrosshairOverlay : MonoBehaviour
         HintAutoAttackColorHex = config.Bind(
             "3 - Hint",
             "Auto attack color",
-            "ffffff",
+            "cb2769",
             "Hint color as an automatic melee attack approaches, as RRGGBB or RRGGBBAA.");
 
         HintAutoAttackThicknessIncrease = config.Bind(
             "3 - Hint",
             "Auto attack thickness increase",
-            75f,
+            110f,
             new ConfigDescription(
                 "Percentage by which hint thickness grows as an automatic melee attack approaches.",
                 new AcceptableValueRange<float>(0f, 200f)));
@@ -275,7 +273,7 @@ internal class CrosshairOverlay : MonoBehaviour
         HintSize = config.Bind(
             "3 - Hint",
             "Size",
-            30,
+            70,
             new ConfigDescription(
                 "Starting diameter of the melee charge hint, in HUD units.",
                 new AcceptableValueRange<int>(8, 64)));
@@ -698,19 +696,16 @@ internal class CrosshairOverlay : MonoBehaviour
             _restAnchored = rect.anchoredPosition;
 
             _centerShape = CreateSprite(rect, sprite, "Center Shape", layer, reference);
-            _centerBackingShape = CreateSprite(rect, sprite, "Center Backing Shape", layer, reference);
             _outlineShape = CreateSprite(rect, sprite, "Outline Shape", layer, reference);
             _hintShape = CreateSprite(rect, _hintCircleSprite!, "Hint Shape", layer, reference);
             if (reference != null
                 && _centerShape.m_sprite != null
-                && _centerBackingShape.m_sprite != null
                 && _outlineShape.m_sprite != null
                 && _hintShape.m_sprite != null)
             {
                 _outlineShape.m_sprite.sortingOrder = reference.sortingOrder + 10;
-                _centerBackingShape.m_sprite.sortingOrder = reference.sortingOrder + 11;
-                _centerShape.m_sprite.sortingOrder = reference.sortingOrder + 12;
-                _hintShape.m_sprite.sortingOrder = reference.sortingOrder + 13;
+                _centerShape.m_sprite.sortingOrder = reference.sortingOrder + 11;
+                _hintShape.m_sprite.sortingOrder = reference.sortingOrder + 12;
             }
 
             _root = root;
@@ -736,7 +731,6 @@ internal class CrosshairOverlay : MonoBehaviour
             _root = null;
             _rect = null;
             _outlineShape = null;
-            _centerBackingShape = null;
             _centerShape = null;
             _hintShape = null;
             _centerDotsSprite = null;
@@ -768,7 +762,6 @@ internal class CrosshairOverlay : MonoBehaviour
         _rect = null;
         _restAnchored = Vector2.zero;
         _outlineShape = null;
-        _centerBackingShape = null;
         _centerShape = null;
         _hintShape = null;
         _centerDotsSprite = null;
@@ -959,7 +952,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private void ApplyStyle()
     {
-        if (_centerShape == null || _centerBackingShape == null || _outlineShape == null)
+        if (_centerShape == null || _outlineShape == null)
             return;
 
         var hex = CenterColorHex.Value;
@@ -1006,10 +999,8 @@ internal class CrosshairOverlay : MonoBehaviour
             visibleCenterSize,
             outlineSpacing);
         SetRendererSprite(_outlineShape, SelectedOutlineSprite(outlineShape));
-        SetRendererSprite(_centerBackingShape, SelectedCenterSprite(shape));
         SetRendererSprite(_centerShape, SelectedCenterSprite(shape));
         SetSprite(_outlineShape, outline, visibleOutlineSize);
-        SetSprite(_centerBackingShape, new Color(0f, 0f, 0f, opacity), visibleCenterSize + 3f);
         SetSprite(_centerShape, color, visibleCenterSize);
     }
 
@@ -1059,7 +1050,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private void ApplyHintThickness(float thickness)
     {
-        thickness = Mathf.Round(Mathf.Clamp(thickness, 0.5f, 16f) * 4f) * 0.25f;
+        thickness = NormalizedShapeThickness(thickness);
         if (Mathf.Approximately(thickness, _appliedHintThickness))
             return;
 
@@ -1084,6 +1075,27 @@ internal class CrosshairOverlay : MonoBehaviour
         }
 
         _appliedHintThickness = thickness;
+    }
+
+    private static float NormalizedShapeThickness(float thickness)
+    {
+        return Mathf.Round(Mathf.Clamp(thickness, 0.5f, 16f) * 4f) * 0.25f;
+    }
+
+    /// <summary>
+    /// Shape thickness is encoded into a 64-pixel texture at 2 pixels per configured unit.
+    /// Growing the diameter by the corresponding inward stroke increase keeps Hint's inner
+    /// edge at approximately the same distance from Outline.
+    /// </summary>
+    private static float HintDiameterWithThicknessSpacing(
+        float diameter,
+        float baseThickness,
+        float currentThickness)
+    {
+        var thicknessIncrease = Mathf.Max(
+            0f,
+            NormalizedShapeThickness(currentThickness) - NormalizedShapeThickness(baseThickness));
+        return diameter * (1f + thicknessIncrease / 16f);
     }
 
     private Sprite? SelectedCenterSprite(ReticleShape shape)
@@ -1175,6 +1187,10 @@ internal class CrosshairOverlay : MonoBehaviour
         var baseThickness = Mathf.Clamp(HintThickness.Value, 0.5f, 16f);
         var thicknessIncrease = Mathf.Clamp(HintAutoAttackThicknessIncrease.Value, 0f, 200f) * 0.01f;
         ApplyHintThickness(baseThickness * (1f + thicknessIncrease * easedWarning));
+        diameter = HintDiameterWithThicknessSpacing(
+            diameter,
+            baseThickness,
+            _appliedHintThickness);
         var renderer = _hintShape?.m_sprite;
         if (renderer != null)
             renderer.sprite = SelectedHintSprite();
@@ -1211,7 +1227,7 @@ internal class CrosshairOverlay : MonoBehaviour
             Mathf.Clamp(OutlineSize.Value, 1, 64),
             visibleCenterSize,
             Mathf.Clamp(OutlineSpacing.Value, 0f, 32f));
-        return Mathf.Max(visibleOutlineSize, visibleCenterSize + 3f);
+        return Mathf.Max(visibleOutlineSize, visibleCenterSize);
     }
 
     private static float HintOriginalSize(float crosshairDiameter)

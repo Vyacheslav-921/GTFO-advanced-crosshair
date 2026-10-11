@@ -36,11 +36,6 @@ public class Plugin : BasePlugin
         Log.LogInfo($"{PluginName} is loaded!");
 
         // AddComponent attaches a Unity MonoBehaviour to the plugin's GameObject.
-        // ClockOverlay.Update will then run every frame and bind to PUI_Watermark when ready.
-        // (See ClockOverlay.cs — it does NOT Harmony-patch watermark methods.)
-        AddComponent<ClockOverlay>();
-        Log.LogInfo("Clock overlay ready (awaits watermark bind).");
-
         CrosshairOverlay.Bind(Config);
         AddComponent<CrosshairOverlay>();
         Log.LogInfo("Crosshair overlay ready (awaits player HUD).");
