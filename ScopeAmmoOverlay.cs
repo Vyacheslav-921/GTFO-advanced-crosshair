@@ -17,6 +17,8 @@ internal sealed class ScopeAmmoOverlay
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<float> Margin { get; private set; } = null!;
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
+    public static ConfigEntry<bool> LowColorEnabled { get; private set; } = null!;
+    public static ConfigEntry<string> LowColorHex { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
 
     private const float TmpPointsPerHudUnit = 10f;
@@ -27,6 +29,8 @@ internal sealed class ScopeAmmoOverlay
     private string? _appliedMagazine;
     private string? _appliedReserve;
     private string? _appliedColorHex;
+    private string? _appliedLowColorHex;
+    private bool _appliedLowColorEnabled;
     private int _appliedSize = -1;
     private float _appliedMargin = -1f;
     private bool _errorLogged;
@@ -53,7 +57,19 @@ internal sealed class ScopeAmmoOverlay
             section,
             "Color",
             "ffffff",
-            "Weapon ammo color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            "Weapon ammo color at a full magazine or full reserve, as RRGGBB or RRGGBBAA. Example: FFFFFF.");
+
+        LowColorEnabled = config.Bind(
+            section,
+            "Low amount red color hint",
+            true,
+            "Shift each weapon ammo line from Color toward Low color as that ammo pool runs out. The magazine line follows rounds left in the magazine. The reserve line follows ammo outside the magazine.");
+
+        LowColorHex = config.Bind(
+            section,
+            "Low color",
+            "ff2a2a",
+            "Color a line reaches when that ammo pool is empty, as RRGGBB or RRGGBBAA. Used while Low amount red color hint is on.");
 
         Size = config.Bind(
             section,
@@ -66,7 +82,7 @@ internal sealed class ScopeAmmoOverlay
 
     public bool Update(Transform? parent, int layer, bool scoped)
     {
-        if (!Enabled.Value || !scoped || !TryGetAmmo(out var magazine, out var reserve, out var color))
+        if (!Enabled.Value || !scoped || !TryGetAmmo(out var magazine, out var reserve, out var magazineLeft, out var reserveLeft))
         {
             Hide();
             return false;
@@ -86,12 +102,21 @@ internal sealed class ScopeAmmoOverlay
         var reserveSize = Mathf.Max(2, Mathf.RoundToInt(size * ReserveSizeScale));
         var margin = Mathf.Clamp(Margin.Value, 0f, 480f);
         var colorHex = ColorHex.Value;
-        var styleChanged = colorHex != _appliedColorHex || size != _appliedSize;
+        var lowColorHex = LowColorHex.Value;
+        var lowColorEnabled = LowColorEnabled.Value;
+        var styleChanged = colorHex != _appliedColorHex
+            || lowColorHex != _appliedLowColorHex
+            || lowColorEnabled != _appliedLowColorEnabled
+            || size != _appliedSize;
+        var full = ParseColor(colorHex, Color.white);
+        var low = ParseColor(lowColorHex, new Color(1f, 0.165f, 0.165f, full.a));
+        var magazineColor = lowColorEnabled ? Color.Lerp(low, full, magazineLeft) : full;
+        var reserveColor = lowColorEnabled ? Color.Lerp(low, full, reserveLeft) : full;
         var lineStep = size * 2.2f;
         ApplyLabel(
             _magazineText!,
             magazine,
-            color,
+            magazineColor,
             size,
             new Vector2(0f, -margin),
             ref _appliedMagazine,
@@ -101,7 +126,7 @@ internal sealed class ScopeAmmoOverlay
         ApplyLabel(
             _reserveText!,
             reserve,
-            color,
+            reserveColor,
             reserveSize,
             new Vector2(0f, -(margin + lineStep)),
             ref _appliedReserve,
@@ -110,8 +135,29 @@ internal sealed class ScopeAmmoOverlay
         _appliedMagazine = magazine;
         _appliedReserve = reserve;
         _appliedColorHex = colorHex;
+        _appliedLowColorHex = lowColorHex;
+        _appliedLowColorEnabled = lowColorEnabled;
         _appliedSize = size;
         _appliedMargin = margin;
+        return true;
+    }
+
+    public bool TryGetContentBottom(out float bottom)
+    {
+        var magazine = TextBottom(_magazineText);
+        var reserve = TextBottom(_reserveText);
+        if (float.IsNaN(magazine) && float.IsNaN(reserve))
+        {
+            bottom = 0f;
+            return false;
+        }
+
+        if (float.IsNaN(magazine))
+            bottom = reserve;
+        else if (float.IsNaN(reserve))
+            bottom = magazine;
+        else
+            bottom = Mathf.Min(magazine, reserve);
         return true;
     }
 
@@ -122,11 +168,12 @@ internal sealed class ScopeAmmoOverlay
         ResetAppliedStyle();
     }
 
-    private bool TryGetAmmo(out string magazine, out string reserve, out Color color)
+    private bool TryGetAmmo(out string magazine, out string reserve, out float magazineLeft, out float reserveLeft)
     {
         magazine = string.Empty;
         reserve = string.Empty;
-        color = ParseColor(ColorHex.Value, Color.white);
+        magazineLeft = 0f;
+        reserveLeft = 0f;
 
         try
         {
@@ -146,8 +193,11 @@ internal sealed class ScopeAmmoOverlay
             if (mag <= 0)
                 return false;
 
+            var reserveRounds = ReserveAmmo(item);
             magazine = clip + " / " + mag;
-            reserve = ReserveAmmo(item).ToString();
+            reserve = reserveRounds.ToString();
+            magazineLeft = Mathf.Clamp01(clip / (float)mag);
+            reserveLeft = ReserveLeft(item, reserveRounds);
             return true;
         }
         catch (Exception ex)
@@ -180,11 +230,56 @@ internal sealed class ScopeAmmoOverlay
         return 0;
     }
 
+    /// <summary>
+    /// Share of reserve ammo still outside the magazine. Bullet packs use their bullet cap.
+    /// Other packs use the ammo cap, then the pack's own relative fill.
+    /// </summary>
+    private static float ReserveLeft(ItemEquippable item, int displayed)
+    {
+        if (displayed <= 0)
+            return 0f;
+
+        var ammo = SlotAmmo(item);
+        if (!Alive(ammo))
+            return 1f;
+
+        if (ammo!.BulletsInPack > 0 && ammo.BulletsMaxCap > 0)
+            return Mathf.Clamp01(ammo.BulletsInPack / (float)ammo.BulletsMaxCap);
+
+        if (ammo.AmmoMaxCap > 0.0001f)
+            return Mathf.Clamp01(ammo.AmmoInPack / ammo.AmmoMaxCap);
+
+        return Mathf.Clamp01(ammo.RelInPack);
+    }
+
+    private static InventorySlotAmmo? SlotAmmo(ItemEquippable item)
+    {
+        var ammoType = item.AmmoType;
+        if (ammoType is AmmoType.None or AmmoType.CurrentConsumable or AmmoType.ResourcePackRel)
+            return null;
+
+        var backpack = PlayerBackpackManager.LocalBackpack;
+        if (!Alive(backpack) || !Alive(backpack!.AmmoStorage))
+            return null;
+
+        var ammo = backpack.AmmoStorage!.GetInventorySlotAmmo(ammoType);
+        return Alive(ammo) ? ammo : null;
+    }
+
     private void Hide()
     {
         ResetAppliedStyle();
         HideText(_magazineText);
         HideText(_reserveText);
+    }
+
+    private static float TextBottom(TextMeshPro? text)
+    {
+        if (!Alive(text) || !text!.gameObject.activeSelf)
+            return float.NaN;
+
+        var rect = text.rectTransform;
+        return rect.anchoredPosition.y - rect.sizeDelta.y * rect.pivot.y;
     }
 
     private static void ApplyLabel(
@@ -271,6 +366,8 @@ internal sealed class ScopeAmmoOverlay
         _appliedMagazine = null;
         _appliedReserve = null;
         _appliedColorHex = null;
+        _appliedLowColorHex = null;
+        _appliedLowColorEnabled = false;
         _appliedSize = -1;
         _appliedMargin = -1f;
     }

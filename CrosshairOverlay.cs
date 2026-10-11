@@ -98,6 +98,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private readonly ItemHintOverlay _itemHints = new();
     private readonly ToolHintOverlay _toolHints = new();
     private readonly ScopeAmmoOverlay _scopeAmmo = new();
+    private readonly EmptyMagOverlay _emptyMag = new();
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -131,6 +132,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private float _hipLookFov;
     private bool _hasHipLookFov;
     private bool _hintChargeActive;
+    private float _hintLayoutDiameter;
     private IntPtr _chargeStatePtr;
     private bool _chargeErrorLogged;
     private bool _crosshairShapesActive;
@@ -394,7 +396,6 @@ internal class CrosshairOverlay : MonoBehaviour
         var showItemHint = _itemHints.Update(hintParent, hintLayer, inHudContext);
         var showToolHint = _toolHints.Update(hintParent, hintLayer, inHudContext);
         var showScopeAmmo = _scopeAmmo.Update(hintParent, hintLayer, scoped);
-        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo;
         if (showCrosshair)
         {
             if (!_crosshairShapesActive)
@@ -408,6 +409,9 @@ internal class CrosshairOverlay : MonoBehaviour
             ApplyHint();
         else if (_hintChargeActive)
             EndHintCharge();
+
+        var showEmptyMag = _emptyMag.Update(hintParent, hintLayer, InAimHud(), HintFloor());
+        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo || showEmptyMag;
 
         if (_root!.activeSelf != showRoot)
         {
@@ -670,6 +674,31 @@ internal class CrosshairOverlay : MonoBehaviour
     private bool InHudContext()
     {
         return InLevelFps() && (!HideWhenScoped.Value || !AimingThroughScope());
+    }
+
+    /// <summary>
+    /// The shooting range stays in the lobby state while the player is aiming.
+    /// </summary>
+    private bool InAimHud()
+    {
+        try
+        {
+            if (FocusStateManager.CurrentState != eFocusState.FPS)
+                return false;
+
+            var state = GameStateManager.CurrentStateName;
+            return state is eGameStateName.InLevel or eGameStateName.Lobby;
+        }
+        catch (Exception ex)
+        {
+            if (!_stateErrorLogged)
+            {
+                _stateErrorLogged = true;
+                Plugin.Instance.Log.LogWarning($"Empty mag HUD check failed: {ex.Message}");
+            }
+
+            return false;
+        }
     }
 
     private bool InLevelFps()
@@ -966,10 +995,12 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedCenterClearance = false;
         _autoAttackBlinkChargePtr = IntPtr.Zero;
         _autoAttackBlinkTriggers = 0;
+        _hintLayoutDiameter = 0f;
         _packHints.Detach();
         _itemHints.Detach();
         _toolHints.Detach();
         _scopeAmmo.Detach();
+        _emptyMag.Detach();
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)
@@ -1456,6 +1487,7 @@ internal class CrosshairOverlay : MonoBehaviour
             autoAttackColor.a *= Mathf.Clamp01(HintOpacity.Value);
             color = Color.Lerp(color, autoAttackColor, easedWarning);
         }
+        _hintLayoutDiameter = diameter;
         SetSprite(_hintShape!, color, diameter);
     }
 
@@ -1463,7 +1495,9 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         ApplyHintThickness(Mathf.Clamp(HintThickness.Value, 0.5f, 16f));
         ApplyHintSprite();
-        SetSprite(_hintShape!, ConfiguredHintColor(), HintOriginalSize(CurrentCrosshairDiameter()));
+        var diameter = HintOriginalSize(CurrentCrosshairDiameter());
+        _hintLayoutDiameter = diameter;
+        SetSprite(_hintShape!, ConfiguredHintColor(), diameter);
     }
 
     private static Color ConfiguredHintColor()
@@ -1483,6 +1517,30 @@ internal class CrosshairOverlay : MonoBehaviour
             visibleCenterSize,
             Mathf.Clamp(OutlineSpacing.Value, 0f, 32f));
         return Mathf.Max(visibleOutlineSize, visibleCenterSize);
+    }
+
+    /// <summary>
+    /// Lowest HUD Y already taken by the crosshair or another hint. Positive Y is up.
+    /// </summary>
+    private float HintFloor()
+    {
+        var floor = 0f;
+        if (_crosshairShapesActive)
+        {
+            floor = Mathf.Min(floor, -CurrentCrosshairDiameter() * 0.5f);
+            if (_hintLayoutDiameter > 0f)
+                floor = Mathf.Min(floor, -_hintLayoutDiameter * 0.5f);
+        }
+
+        if (_packHints.TryGetContentBottom(out var packBottom))
+            floor = Mathf.Min(floor, packBottom);
+        if (_itemHints.TryGetContentBottom(out var itemBottom))
+            floor = Mathf.Min(floor, itemBottom);
+        if (_toolHints.TryGetContentBottom(out var toolBottom))
+            floor = Mathf.Min(floor, toolBottom);
+        if (_scopeAmmo.TryGetContentBottom(out var scopeBottom))
+            floor = Mathf.Min(floor, scopeBottom);
+        return floor;
     }
 
     private static float HintOriginalSize(float crosshairDiameter)
@@ -1607,6 +1665,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private void HideHint()
     {
+        _hintLayoutDiameter = 0f;
         var renderer = _hintShape?.m_sprite;
         if (renderer != null)
             renderer.color = new Color(1f, 0.05f, 0.08f, 0f);

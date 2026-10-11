@@ -41,6 +41,7 @@ public class Plugin : BasePlugin
         ItemHintOverlay.Bind(Config);
         ToolHintOverlay.Bind(Config);
         ScopeAmmoOverlay.Bind(Config);
+        EmptyMagOverlay.Bind(Config);
         AddComponent<CrosshairOverlay>();
         Log.LogInfo("Crosshair overlay ready (awaits player HUD).");
 

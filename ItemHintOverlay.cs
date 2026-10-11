@@ -127,6 +127,11 @@ internal sealed class ItemHintOverlay
         return true;
     }
 
+    public bool TryGetContentBottom(out float bottom)
+    {
+        return TryGetTextBottom(_capacityText, out bottom);
+    }
+
     public void Detach()
     {
         DestroyText(ref _capacityText);
@@ -146,6 +151,17 @@ internal sealed class ItemHintOverlay
     {
         ResetAppliedStyle();
         HideText(_capacityText);
+    }
+
+    private static bool TryGetTextBottom(TextMeshPro? text, out float bottom)
+    {
+        bottom = 0f;
+        if (!Alive(text) || !text!.gameObject.activeSelf)
+            return false;
+
+        var rect = text.rectTransform;
+        bottom = rect.anchoredPosition.y - rect.sizeDelta.y * rect.pivot.y;
+        return true;
     }
 
     private static void ApplyLabel(
