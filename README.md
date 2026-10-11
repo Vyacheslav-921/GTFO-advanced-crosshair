@@ -1,4 +1,4 @@
-# GTFO-time-ui
+# V-921
 
 BepInEx 6 (IL2CPP) plugin for [GTFO](https://store.steampowered.com/app/493520/GTFO/) that replaces the bottom-right watermark text (build / version string) with the **current local time** (`HH:mm:ss`).
 
@@ -23,7 +23,7 @@ You should see the local time in the bottom-right watermark instead of the stock
 
 ## Build (developers)
 
-This repo targets an r2modman profile named `my-mod`. Adjust `Profile` / paths in `GtfoTimeUi.csproj` if yours differs.
+Copy `local.props.example` to `local.props` and set `BepInEx` to your profile’s BepInEx folder. That path is only for compile references and is not committed.
 
 ```powershell
 dotnet build
@@ -31,15 +31,15 @@ dotnet build
 
 Output:
 
-`%AppData%\r2modmanPlus-local\GTFO\profiles\my-mod\BepInEx\plugins\GTFO-testmod\`
+`build\V-921.dll`
 
-Then launch GTFO via r2modman **Play Modded** on that profile.
+Copy that DLL into the profile’s `BepInEx\plugins\` folder, then launch GTFO via r2modman **Play Modded**.
 
 ## Verify
 
 In the BepInEx console or `BepInEx\LogOutput.log`:
 
-- `GTFO-time-ui is loaded!`
+- `V-921 is loaded!`
 - `Clock overlay ready (awaits watermark bind).`
 - `Harmony patches applied.`
 - After the watermark UI is ready: `Clock bound to PUI_Watermark (poll).`

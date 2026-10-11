@@ -2,7 +2,7 @@ using System;
 using TMPro;
 using UnityEngine;
 
-namespace GtfoTestmod;
+namespace V921;
 
 /// <summary>
 /// Drives the persistent helmet-corner watermark text with the local system clock.
@@ -16,8 +16,7 @@ namespace GtfoTestmod;
 /// Patching watermark Setup/Awake can run before GuiManager is ready and crash startup.
 /// Polling until the object exists is safer for a "tweak existing UI text" feature.
 ///
-/// Types live in game interop assemblies under:
-///   %AppData%\r2modmanPlus-local\GTFO\profiles\my-mod\BepInEx\interop\
+/// Types live in the profile interop assemblies (BepInEx\interop\ from local.props).
 /// Inspect with ILSpy / dnSpyEx. Watermark UI is typically around GuiManager / PUI_Watermark.
 /// </summary>
 internal class ClockOverlay : MonoBehaviour

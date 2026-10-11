@@ -2,7 +2,7 @@ using BepInEx;
 using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
 
-namespace GtfoTestmod;
+namespace V921;
 
 /// <summary>
 /// Entry point for the BepInEx plugin.
@@ -18,8 +18,8 @@ namespace GtfoTestmod;
 public class Plugin : BasePlugin
 {
     // Unique id used by BepInEx + Harmony (must stay stable across versions).
-    public const string PluginGuid = "levi.GTFO-time-ui";
-    public const string PluginName = "GTFO-time-ui"; 
+    public const string PluginGuid = "gtfo-crosshair-dot";
+    public const string PluginName = "gtfo-crosshair-dot"; 
     public const string PluginVersion = "1.0.0";
 
     /// <summary>Singleton so patches / MonoBehaviours can log through this plugin instance.</summary>
@@ -40,6 +40,10 @@ public class Plugin : BasePlugin
         // (See ClockOverlay.cs — it does NOT Harmony-patch watermark methods.)
         AddComponent<ClockOverlay>();
         Log.LogInfo("Clock overlay ready (awaits watermark bind).");
+
+        CenterDotOverlay.Bind(Config);
+        AddComponent<CenterDotOverlay>();
+        Log.LogInfo("Center dot overlay ready (awaits player HUD).");
 
         // Harmony.PatchAll() scans this assembly for [HarmonyPatch] classes and applies them.
         // Currently that means Patches/RundownPagePatch.cs → CM_PageRundown_New.Setup postfix.

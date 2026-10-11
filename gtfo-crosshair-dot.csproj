@@ -1,17 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="local.props" Condition="Exists('local.props')" />
   <PropertyGroup>
-    <Profile>my-mod</Profile>
     <TargetFramework>net6.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <DebugType>None</DebugType>
-    <AssemblyName>GtfoTestmod</AssemblyName>
-    <RootNamespace>GtfoTestmod</RootNamespace>
-    <BepInEx>$(AppData)\r2modmanPlus-local\GTFO\profiles\$(Profile)\BepInEx</BepInEx>
-    <BuildDirectory>$(BepInEx)\plugins\GTFO-testmod\</BuildDirectory>
-    <OutputPath>$(BuildDirectory)</OutputPath>
+    <AssemblyName>gtfo-crosshair-dot</AssemblyName>
+    <RootNamespace>gtfo-crosshair-dot</RootNamespace>
+    <OutputPath>$(MSBuildProjectDirectory)\build\</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
+  <Target Name="EnsureBepInEx" BeforeTargets="ResolveAssemblyReferences">
+    <Error
+      Condition="'$(BepInEx)' == '' OR !Exists('$(BepInEx)\core\BepInEx.Core.dll')"
+      Text="BepInEx reference path is missing. Copy local.props.example to local.props and set BepInEx to that profile's BepInEx folder. Those assemblies are compile references only; the mod builds into build\." />
+  </Target>
   <Target Name="PostBuild" BeforeTargets="PostBuildEvent">
     <Delete Files="$(OutputPath)$(AssemblyName).deps.json" />
   </Target>

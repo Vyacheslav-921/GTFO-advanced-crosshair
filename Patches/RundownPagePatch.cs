@@ -1,7 +1,7 @@
 using CellMenu;
 using HarmonyLib;
 
-namespace GtfoTestmod.Patches;
+namespace V921.Patches;
 
 [HarmonyPatch]
 internal static class RundownPagePatch

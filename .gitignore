@@ -1,5 +1,7 @@
 bin/
 obj/
+build/
+local.props
 *.user
 *.suo
 .vs/
