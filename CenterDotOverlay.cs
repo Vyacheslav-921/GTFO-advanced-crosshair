@@ -22,6 +22,9 @@ namespace V921;
 /// a viewport point around (0.5, 0.5). That offset is added in canvas space on top of
 /// the sway rest position. Shotguns stay centered: their pellets follow the camera.
 ///
+/// A same-colored room swallows the fill. A black ring and a complementary ring sit
+/// behind it, so one of the two edges still reads against that light.
+///
 /// Shown only when all of these are true:
 /// - <see cref="GameStateManager.CurrentStateName"/> is <see cref="eGameStateName.InLevel"/>
 /// - <see cref="FocusStateManager.CurrentState"/> is <see cref="eFocusState.FPS"/>
@@ -52,6 +55,7 @@ internal class CenterDotOverlay : MonoBehaviour
     private RectTransform? _rect;
     private Vector2 _restAnchored;
     private IntPtr _parentPtr;
+    private UI_Sprite? _halo;
     private UI_Sprite? _outline;
     private UI_Sprite? _dot;
     private float _nextCreateAttempt;
@@ -97,15 +101,15 @@ internal class CenterDotOverlay : MonoBehaviour
         Size = config.Bind(
             "Center dot",
             "Size",
-            4,
+            3,
             new ConfigDescription(
-                "Colored dot diameter in HUD units. A 2px dark ring is drawn behind it.",
+                "Colored dot diameter in HUD units. A dark ring and a complementary ring are drawn behind it.",
                 new AcceptableValueRange<int>(1, 32)));
 
         Opacity = config.Bind(
             "Center dot",
             "Opacity",
-            1f,
+            0.9f,
             new ConfigDescription(
                 "Dot opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
@@ -488,12 +492,14 @@ internal class CenterDotOverlay : MonoBehaviour
             _rect = rect;
             _restAnchored = rect.anchoredPosition;
 
+            _halo = CreateSprite(rect, sprite, "Halo", layer, reference);
             _outline = CreateSprite(rect, sprite, "Outline", layer, reference);
             _dot = CreateSprite(rect, sprite, "Dot", layer, reference);
-            if (reference != null && _dot.m_sprite != null && _outline.m_sprite != null)
+            if (reference != null && _dot.m_sprite != null && _outline.m_sprite != null && _halo.m_sprite != null)
             {
-                _outline.m_sprite.sortingOrder = reference.sortingOrder + 10;
-                _dot.m_sprite.sortingOrder = reference.sortingOrder + 11;
+                _halo.m_sprite.sortingOrder = reference.sortingOrder + 10;
+                _outline.m_sprite.sortingOrder = reference.sortingOrder + 11;
+                _dot.m_sprite.sortingOrder = reference.sortingOrder + 12;
             }
 
             _root = root;
@@ -509,6 +515,7 @@ internal class CenterDotOverlay : MonoBehaviour
         {
             _root = null;
             _rect = null;
+            _halo = null;
             _outline = null;
             _dot = null;
             _parentPtr = IntPtr.Zero;
@@ -527,6 +534,7 @@ internal class CenterDotOverlay : MonoBehaviour
         _root = null;
         _rect = null;
         _restAnchored = Vector2.zero;
+        _halo = null;
         _outline = null;
         _dot = null;
         _parentPtr = IntPtr.Zero;
@@ -627,7 +635,7 @@ internal class CenterDotOverlay : MonoBehaviour
         }
 
         tex.Apply();
-        tex.filterMode = FilterMode.Bilinear;
+        tex.filterMode = FilterMode.Point;
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.hideFlags = HideFlags.HideAndDontSave;
 
@@ -642,7 +650,7 @@ internal class CenterDotOverlay : MonoBehaviour
 
     private void ApplyStyle()
     {
-        if (_dot == null || _outline == null)
+        if (_dot == null || _outline == null || _halo == null)
             return;
 
         var hex = ColorHex.Value;
@@ -657,8 +665,24 @@ internal class CenterDotOverlay : MonoBehaviour
 
         var color = ParseColor(hex);
         color.a *= opacity;
+        var contrast = ContrastColor(color);
+        contrast.a *= opacity;
+        SetSprite(_halo, contrast, size + 6);
+        SetSprite(_outline, new Color(0f, 0f, 0f, opacity), size + 3);
         SetSprite(_dot, color, size);
-        SetSprite(_outline, new Color(0f, 0f, 0f, 0.9f * opacity), size + 2);
+    }
+
+    /// <summary>
+    /// Opposite hue of the dot. A cyan room hides a cyan fill, and this ring stays visible there.
+    /// Gray dots have no opposite hue, so the ring flips between black and white instead.
+    /// </summary>
+    private static Color ContrastColor(Color dot)
+    {
+        Color.RGBToHSV(dot, out var hue, out var saturation, out var value);
+        if (saturation < 0.2f)
+            return value >= 0.5f ? Color.black : Color.white;
+
+        return Color.HSVToRGB(Mathf.Repeat(hue + 0.5f, 1f), 1f, 1f);
     }
 
     private static void SetSprite(UI_Sprite ui, Color color, float size)
