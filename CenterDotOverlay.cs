@@ -1,6 +1,9 @@
 using System;
 using BepInEx.Configuration;
+using FirstPersonItem;
+using GameData;
 using Il2CppInterop.Runtime.InteropTypes;
+using Player;
 using UnityEngine;
 
 namespace V921;
@@ -14,18 +17,22 @@ namespace V921;
 /// then registered with <see cref="UI_Core.UIPassHUD"/> so the visor blit
 /// (pixel, skew, opacity) includes it.
 ///
-/// Shown only when both are true:
+/// Shown only when all of these are true:
 /// - <see cref="GameStateManager.CurrentStateName"/> is <see cref="eGameStateName.InLevel"/>
 /// - <see cref="FocusStateManager.CurrentState"/> is <see cref="eFocusState.FPS"/>
+/// - the player is not aiming through a magnified scope
 /// </summary>
 internal class CenterDotOverlay : MonoBehaviour
 {
     private const int TextureSize = 16;
 
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
+    public static ConfigEntry<bool> HideWhenScoped { get; private set; } = null!;
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
     public static ConfigEntry<float> Opacity { get; private set; } = null!;
+
+    private const float ScopeFovMargin = 2f;
 
     private GameObject? _root;
     private IntPtr _parentPtr;
@@ -36,6 +43,9 @@ internal class CenterDotOverlay : MonoBehaviour
     private int _appliedSize = -1;
     private float _appliedOpacity = -1f;
     private bool _stateErrorLogged;
+    private bool _scopeErrorLogged;
+    private float _hipLookFov;
+    private bool _hasHipLookFov;
 
     public CenterDotOverlay(IntPtr ptr) : base(ptr)
     {
@@ -48,6 +58,12 @@ internal class CenterDotOverlay : MonoBehaviour
             "Enabled",
             true,
             "Draw a dot at the visor center while aiming in a level.");
+
+        HideWhenScoped = config.Bind(
+            "Center dot",
+            "Hide when scoped",
+            true,
+            "Hide the dot while aiming through a magnified scope.");
 
         ColorHex = config.Bind(
             "Center dot",
@@ -195,7 +211,10 @@ internal class CenterDotOverlay : MonoBehaviour
             if (GameStateManager.CurrentStateName != eGameStateName.InLevel)
                 return false;
 
-            return FocusStateManager.CurrentState == eFocusState.FPS;
+            if (FocusStateManager.CurrentState != eFocusState.FPS)
+                return false;
+
+            return !HideWhenScoped.Value || !AimingThroughScope();
         }
         catch (Exception ex)
         {
@@ -207,6 +226,111 @@ internal class CenterDotOverlay : MonoBehaviour
 
             return false;
         }
+    }
+
+    /// <summary>
+    /// True while the wielded sight magnifies the world camera.
+    /// </summary>
+    private bool AimingThroughScope()
+    {
+        try
+        {
+            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+                return false;
+
+            var holder = player!.FPItemHolder;
+            if (!Alive(holder))
+                return false;
+
+            var look = holder!.LookCamFov;
+            var aiming = holder.m_currentState == FPItemStateName.Aim;
+            if (!aiming)
+            {
+                RememberHipFov(look);
+                return false;
+            }
+
+            if (!_hasHipLookFov)
+                RememberHipFovFromAimStart(look);
+
+            var item = holder.WieldedItem;
+            if (!Alive(item))
+                return false;
+
+            return SightMagnifies(item!);
+        }
+        catch (Exception ex)
+        {
+            if (!_scopeErrorLogged)
+            {
+                _scopeErrorLogged = true;
+                Plugin.Instance.Log.LogWarning($"Center dot scope check failed: {ex.Message}");
+            }
+
+            return false;
+        }
+    }
+
+    private void RememberHipFov(LerpingPairFloat? look)
+    {
+        if (!Alive(look))
+            return;
+
+        var hip = look!.Target;
+        if (hip <= 1f)
+            return;
+
+        _hipLookFov = hip;
+        _hasHipLookFov = true;
+    }
+
+    /// <summary>
+    /// Aim just started before a hip sample existed. The lerp still begins at the unscoped FOV.
+    /// </summary>
+    private void RememberHipFovFromAimStart(LerpingPairFloat? look)
+    {
+        if (!Alive(look))
+            return;
+
+        var hip = look!.Start;
+        if (hip <= 1f)
+            return;
+
+        _hipLookFov = hip;
+        _hasHipLookFov = true;
+    }
+
+    private bool SightMagnifies(ItemEquippable item)
+    {
+        var parts = item.GearPartHolder;
+        if (Alive(parts))
+        {
+            var sight = parts!.SightData;
+            if (Alive(sight))
+            {
+                var props = sight!.SightProperties;
+                if (Alive(props))
+                {
+                    var step = props!.WorldFovZoom;
+                    if (step >= (int)WorldCameraFov.ZoomStep1 && step <= (int)WorldCameraFov.ZoomStep3)
+                        return true;
+                }
+            }
+        }
+
+        if (!_hasHipLookFov)
+            return false;
+
+        var zoom = item.GetWorldCameraZoomFov();
+        if (zoom > 1f && zoom < _hipLookFov - ScopeFovMargin)
+            return true;
+
+        var fps = item.ItemFPSData;
+        if (!Alive(fps))
+            return false;
+
+        var adsFov = fps!.LookCameraFOVZoom;
+        return adsFov > 1 && adsFov < _hipLookFov - ScopeFovMargin;
     }
 
     private void TryCreate(Transform parent)
