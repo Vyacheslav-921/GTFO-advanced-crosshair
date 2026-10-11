@@ -10,14 +10,12 @@ using UnityEngine;
 namespace V921;
 
 /// <summary>
-/// Consumable naming hint below the reticle, plus remaining uses at the visor center.
-/// These are level pickups the player wields and spends, such as a glow stick or fog repeller.
+/// Remaining uses at the visor center for a level consumable, such as a glow stick or fog repeller.
 /// </summary>
 internal sealed class ItemHintOverlay
 {
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
-    public static ConfigEntry<float> Margin { get; private set; } = null!;
     public static ConfigEntry<float> Opacity { get; private set; } = null!;
     public static ConfigEntry<string> GlowColorHex { get; private set; } = null!;
     public static ConfigEntry<string> FogColorHex { get; private set; } = null!;
@@ -31,8 +29,6 @@ internal sealed class ItemHintOverlay
     public static ConfigEntry<string> HeavyFogColorHex { get; private set; } = null!;
 
     private const float TmpPointsPerHudUnit = 10f;
-    private const float NamingSizeScale = 1.2f;
-    private const float CapacitySizeScale = 1.1f;
     private const float ColorSaturationBoost = 1.1f;
 
     private enum ItemHintKind
@@ -49,13 +45,10 @@ internal sealed class ItemHintOverlay
         HeavyFog
     }
 
-    private TextMeshPro? _namingText;
     private TextMeshPro? _capacityText;
-    private string? _appliedNaming;
     private string? _appliedCapacity;
     private string? _appliedColorHex;
     private int _appliedSize = -1;
-    private float _appliedMargin = -1f;
     private float _appliedOpacity = -1f;
     private bool _errorLogged;
 
@@ -67,23 +60,15 @@ internal sealed class ItemHintOverlay
             section,
             "Enabled",
             true,
-            "Show item naming below the crosshair and remaining uses at its center while holding a level consumable.");
+            "Show remaining uses at the crosshair center while holding a level consumable.");
 
         Size = config.Bind(
             section,
             "Size",
-            16,
+            18,
             new ConfigDescription(
-                "Item naming hint height in HUD units. Item count hint uses a smaller size.",
+                "Item count hint height in HUD units.",
                 new AcceptableValueRange<int>(2, 48)));
-
-        Margin = config.Bind(
-            section,
-            "Margin",
-            7.8f,
-            new ConfigDescription(
-                "Distance from the crosshair's outer edge to the item naming hint. Count hint stays at the center.",
-                new AcceptableValueRange<float>(0f, 48f)));
 
         Opacity = config.Bind(
             section,
@@ -105,9 +90,9 @@ internal sealed class ItemHintOverlay
         HeavyFogColorHex = BindColor(config, section, "Heavy fog color", "HFOG", "ffffff");
     }
 
-    public bool Update(Transform? parent, int layer, bool inHudContext, float crosshairDiameter)
+    public bool Update(Transform? parent, int layer, bool inHudContext)
     {
-        if (!Enabled.Value || !inHudContext || !TryGetHeldItem(out var naming, out var capacity, out var color, out var colorHex))
+        if (!Enabled.Value || !inHudContext || !TryGetHeldItem(out var capacity, out var color, out var colorHex))
         {
             Hide();
             return false;
@@ -116,51 +101,34 @@ internal sealed class ItemHintOverlay
         if (!Alive(parent))
             return false;
 
-        if (!Alive(_namingText))
-            _namingText = Create(parent!, layer, "Item Naming Hint", new Vector2(0.5f, 1f), TextAlignmentOptions.Top);
         if (!Alive(_capacityText))
             _capacityText = Create(parent!, layer, "Item Capacity Hint", new Vector2(0.5f, 0.5f), TextAlignmentOptions.Center);
-        if (!Alive(_namingText) || !Alive(_capacityText))
+        if (!Alive(_capacityText))
             return false;
 
         var size = Mathf.Clamp(Size.Value, 2, 48);
-        var namingSize = Mathf.Max(2, Mathf.RoundToInt(size * NamingSizeScale));
-        var capacitySize = Mathf.Max(2, Mathf.RoundToInt(size * CapacitySizeScale));
-        var margin = Mathf.Clamp(Margin.Value, 0f, 48f);
         var opacity = Mathf.Clamp01(Opacity.Value);
         color.a *= opacity;
         var styleChanged = colorHex != _appliedColorHex
             || size != _appliedSize
             || !Mathf.Approximately(opacity, _appliedOpacity);
         ApplyLabel(
-            _namingText!,
-            naming,
-            color,
-            namingSize,
-            new Vector2(0f, -(crosshairDiameter * 0.5f + margin)),
-            ref _appliedNaming,
-            updateLayout: naming != _appliedNaming
-                || styleChanged
-                || !Mathf.Approximately(margin, _appliedMargin));
-        ApplyLabel(
             _capacityText!,
             capacity,
             color,
-            capacitySize,
+            size,
             Vector2.zero,
             ref _appliedCapacity,
             updateLayout: capacity != _appliedCapacity || styleChanged);
 
         _appliedColorHex = colorHex;
         _appliedSize = size;
-        _appliedMargin = margin;
         _appliedOpacity = opacity;
         return true;
     }
 
     public void Detach()
     {
-        DestroyText(ref _namingText);
         DestroyText(ref _capacityText);
         ResetAppliedStyle();
     }
@@ -171,13 +139,12 @@ internal sealed class ItemHintOverlay
             section,
             key,
             defaultHex,
-            $"{naming} item hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            $"{naming} item count color as RRGGBB or RRGGBBAA. Example: FF3355.");
     }
 
     private void Hide()
     {
         ResetAppliedStyle();
-        HideText(_namingText);
         HideText(_capacityText);
     }
 
@@ -265,9 +232,8 @@ internal sealed class ItemHintOverlay
         }
     }
 
-    private bool TryGetHeldItem(out string naming, out string capacity, out Color color, out string colorHex)
+    private bool TryGetHeldItem(out string capacity, out Color color, out string colorHex)
     {
-        naming = string.Empty;
         capacity = string.Empty;
         color = Color.white;
         colorHex = string.Empty;
@@ -282,7 +248,7 @@ internal sealed class ItemHintOverlay
                 return false;
 
             var item = holder!.WieldedItem;
-            if (!Alive(item) || !TryGetItemStyle(item!, out naming, out color, out colorHex))
+            if (!Alive(item) || !TryGetItemStyle(item!, out color, out colorHex))
                 return false;
 
             capacity = RemainingUses(item!).ToString();
@@ -295,63 +261,28 @@ internal sealed class ItemHintOverlay
         }
     }
 
-    private static bool TryGetItemStyle(
-        ItemEquippable item,
-        out string naming,
-        out Color color,
-        out string colorHex)
+    private static bool TryGetItemStyle(ItemEquippable item, out Color color, out string colorHex)
     {
         if (!TryClassify(item, out var kind))
         {
-            naming = string.Empty;
             color = Color.white;
             colorHex = string.Empty;
             return false;
         }
 
-        switch (kind)
+        colorHex = kind switch
         {
-            case ItemHintKind.Glow:
-                colorHex = GlowColorHex.Value;
-                naming = "GLOW";
-                break;
-            case ItemHintKind.Fog:
-                colorHex = FogColorHex.Value;
-                naming = "FOG";
-                break;
-            case ItemHintKind.Foam:
-                colorHex = FoamColorHex.Value;
-                naming = "FOAM";
-                break;
-            case ItemHintKind.Melter:
-                colorHex = MelterColorHex.Value;
-                naming = "MELT";
-                break;
-            case ItemHintKind.HealthSyringe:
-                colorHex = HealthSyringeColorHex.Value;
-                naming = "HEAL";
-                break;
-            case ItemHintKind.MeleeSyringe:
-                colorHex = MeleeSyringeColorHex.Value;
-                naming = "MELEE";
-                break;
-            case ItemHintKind.Mine:
-                colorHex = MineColorHex.Value;
-                naming = "MINE";
-                break;
-            case ItemHintKind.FoamMine:
-                colorHex = FoamMineColorHex.Value;
-                naming = "CMINE";
-                break;
-            case ItemHintKind.Flash:
-                colorHex = FlashColorHex.Value;
-                naming = "FLASH";
-                break;
-            default:
-                colorHex = HeavyFogColorHex.Value;
-                naming = "HFOG";
-                break;
-        }
+            ItemHintKind.Glow => GlowColorHex.Value,
+            ItemHintKind.Fog => FogColorHex.Value,
+            ItemHintKind.Foam => FoamColorHex.Value,
+            ItemHintKind.Melter => MelterColorHex.Value,
+            ItemHintKind.HealthSyringe => HealthSyringeColorHex.Value,
+            ItemHintKind.MeleeSyringe => MeleeSyringeColorHex.Value,
+            ItemHintKind.Mine => MineColorHex.Value,
+            ItemHintKind.FoamMine => FoamMineColorHex.Value,
+            ItemHintKind.Flash => FlashColorHex.Value,
+            _ => HeavyFogColorHex.Value
+        };
 
         color = ParseColor(colorHex, Color.white);
         return true;
@@ -495,11 +426,9 @@ internal sealed class ItemHintOverlay
 
     private void ResetAppliedStyle()
     {
-        _appliedNaming = null;
         _appliedCapacity = null;
         _appliedColorHex = null;
         _appliedSize = -1;
-        _appliedMargin = -1f;
         _appliedOpacity = -1f;
     }
 

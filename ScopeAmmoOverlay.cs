@@ -15,10 +15,9 @@ namespace V921;
 internal sealed class ScopeAmmoOverlay
 {
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
-    public static ConfigEntry<int> Size { get; private set; } = null!;
-    public static ConfigEntry<float> Offset { get; private set; } = null!;
-    public static ConfigEntry<float> Opacity { get; private set; } = null!;
+    public static ConfigEntry<float> Margin { get; private set; } = null!;
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
+    public static ConfigEntry<int> Size { get; private set; } = null!;
 
     private const float TmpPointsPerHudUnit = 10f;
     private const float ReserveSizeScale = 0.85f;
@@ -29,19 +28,32 @@ internal sealed class ScopeAmmoOverlay
     private string? _appliedReserve;
     private string? _appliedColorHex;
     private int _appliedSize = -1;
-    private float _appliedOffset = -1f;
-    private float _appliedOpacity = -1f;
+    private float _appliedMargin = -1f;
     private bool _errorLogged;
 
     public static void Bind(ConfigFile config)
     {
-        const string section = "8 - Scope Ammo";
+        const string section = "8 - Weapon Ammo";
 
         Enabled = config.Bind(
             section,
             "Enabled",
             true,
             "While aiming through a magnified scope, show magazine rounds and reserve ammo below the screen center.");
+
+        Margin = config.Bind(
+            section,
+            "Margin",
+            110f,
+            new ConfigDescription(
+                "Distance from the screen center to the weapon ammo hint.",
+                new AcceptableValueRange<float>(0f, 480f)));
+
+        ColorHex = config.Bind(
+            section,
+            "Color",
+            "ffffff",
+            "Weapon ammo color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         Size = config.Bind(
             section,
@@ -50,28 +62,6 @@ internal sealed class ScopeAmmoOverlay
             new ConfigDescription(
                 "Magazine line height in HUD units. Reserve ammo uses a smaller size.",
                 new AcceptableValueRange<int>(2, 48)));
-
-        Offset = config.Bind(
-            section,
-            "Offset",
-            150f,
-            new ConfigDescription(
-                "Distance below the screen center, toward the weapon.",
-                new AcceptableValueRange<float>(0f, 480f)));
-
-        Opacity = config.Bind(
-            section,
-            "Opacity",
-            0.85f,
-            new ConfigDescription(
-                "Scope ammo text opacity. 0 is invisible, 1 is solid.",
-                new AcceptableValueRange<float>(0f, 1f)));
-
-        ColorHex = config.Bind(
-            section,
-            "Color",
-            "ffffff",
-            "Scope ammo color as RRGGBB or RRGGBBAA. Example: FF3355.");
     }
 
     public bool Update(Transform? parent, int layer, bool scoped)
@@ -94,39 +84,34 @@ internal sealed class ScopeAmmoOverlay
 
         var size = Mathf.Clamp(Size.Value, 2, 48);
         var reserveSize = Mathf.Max(2, Mathf.RoundToInt(size * ReserveSizeScale));
-        var offset = Mathf.Clamp(Offset.Value, 0f, 480f);
-        var opacity = Mathf.Clamp01(Opacity.Value);
+        var margin = Mathf.Clamp(Margin.Value, 0f, 480f);
         var colorHex = ColorHex.Value;
-        color.a *= opacity;
-        var styleChanged = colorHex != _appliedColorHex
-            || size != _appliedSize
-            || !Mathf.Approximately(opacity, _appliedOpacity);
+        var styleChanged = colorHex != _appliedColorHex || size != _appliedSize;
         var lineStep = size * 2.2f;
         ApplyLabel(
             _magazineText!,
             magazine,
             color,
             size,
-            new Vector2(0f, -offset),
+            new Vector2(0f, -margin),
             ref _appliedMagazine,
             updateLayout: magazine != _appliedMagazine
                 || styleChanged
-                || !Mathf.Approximately(offset, _appliedOffset));
+                || !Mathf.Approximately(margin, _appliedMargin));
         ApplyLabel(
             _reserveText!,
             reserve,
             color,
             reserveSize,
-            new Vector2(0f, -(offset + lineStep)),
+            new Vector2(0f, -(margin + lineStep)),
             ref _appliedReserve,
-            updateLayout: reserve != _appliedReserve || styleChanged || !Mathf.Approximately(offset, _appliedOffset));
+            updateLayout: reserve != _appliedReserve || styleChanged || !Mathf.Approximately(margin, _appliedMargin));
 
         _appliedMagazine = magazine;
         _appliedReserve = reserve;
         _appliedColorHex = colorHex;
         _appliedSize = size;
-        _appliedOffset = offset;
-        _appliedOpacity = opacity;
+        _appliedMargin = margin;
         return true;
     }
 
@@ -287,8 +272,7 @@ internal sealed class ScopeAmmoOverlay
         _appliedReserve = null;
         _appliedColorHex = null;
         _appliedSize = -1;
-        _appliedOffset = -1f;
-        _appliedOpacity = -1f;
+        _appliedMargin = -1f;
     }
 
     private static void HideText(TextMeshPro? text)

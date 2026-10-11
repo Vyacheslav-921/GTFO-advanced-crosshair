@@ -390,9 +390,8 @@ internal class CrosshairOverlay : MonoBehaviour
         var inLevel = InLevelFps();
         var scoped = inLevel && AimingThroughScope();
         var inHudContext = inLevel && (!HideWhenScoped.Value || !scoped);
-        var crosshairDiameter = CurrentCrosshairDiameter();
-        var showPackHint = _packHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
-        var showItemHint = _itemHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
+        var showPackHint = _packHints.Update(hintParent, hintLayer, inHudContext);
+        var showItemHint = _itemHints.Update(hintParent, hintLayer, inHudContext);
         var showToolHint = _toolHints.Update(hintParent, hintLayer, inHudContext);
         var showScopeAmmo = _scopeAmmo.Update(hintParent, hintLayer, scoped);
         var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo;

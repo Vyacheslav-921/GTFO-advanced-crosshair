@@ -9,13 +9,12 @@ using UnityEngine;
 namespace V921;
 
 /// <summary>
-/// Pack naming hint below the reticle, plus remaining pack capacity at the visor center.
+/// Remaining pack capacity at the visor center.
 /// </summary>
 internal sealed class PackHintOverlay
 {
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
-    public static ConfigEntry<float> Margin { get; private set; } = null!;
     public static ConfigEntry<float> Opacity { get; private set; } = null!;
     public static ConfigEntry<string> ToolColorHex { get; private set; } = null!;
     public static ConfigEntry<string> MedColorHex { get; private set; } = null!;
@@ -23,17 +22,12 @@ internal sealed class PackHintOverlay
     public static ConfigEntry<string> DisinfColorHex { get; private set; } = null!;
 
     private const float TmpPointsPerHudUnit = 10f;
-    private const float NamingSizeScale = 1.2f;
-    private const float CapacitySizeScale = 1.1f;
     private const float ColorSaturationBoost = 1.1f;
 
-    private TextMeshPro? _namingText;
     private TextMeshPro? _capacityText;
-    private string? _appliedNaming;
     private string? _appliedCapacity;
     private string? _appliedColorHex;
     private int _appliedSize = -1;
-    private float _appliedMargin = -1f;
     private float _appliedOpacity = -1f;
     private bool _errorLogged;
 
@@ -43,23 +37,15 @@ internal sealed class PackHintOverlay
             "5 - Packs Hints",
             "Enabled",
             true,
-            "Show pack naming below the crosshair and remaining capacity at its center while holding a resource pack.");
+            "Show remaining pack capacity at the crosshair center while holding a resource pack.");
 
         Size = config.Bind(
             "5 - Packs Hints",
             "Size",
-            16,
+            18,
             new ConfigDescription(
-                "Pack naming hint height in HUD units. Pack capacity hint uses a smaller size.",
+                "Pack capacity hint height in HUD units.",
                 new AcceptableValueRange<int>(2, 48)));
-
-        Margin = config.Bind(
-            "5 - Packs Hints",
-            "Margin",
-            7.8f,
-            new ConfigDescription(
-                "Distance from the crosshair's outer edge to the pack naming hint. Capacity hint stays at the center.",
-                new AcceptableValueRange<float>(0f, 48f)));
 
         Opacity = config.Bind(
             "5 - Packs Hints",
@@ -73,30 +59,30 @@ internal sealed class PackHintOverlay
             "5 - Packs Hints",
             "Tool color",
             "6eccff",
-            "TOOL pack hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            "TOOL pack capacity color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         MedColorHex = config.Bind(
             "5 - Packs Hints",
             "Medpack color",
             "ff7893",
-            "HP pack hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            "HP pack capacity color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         AmmoColorHex = config.Bind(
             "5 - Packs Hints",
             "Ammo color",
             "e0d489",
-            "AMMO pack hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            "AMMO pack capacity color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         DisinfColorHex = config.Bind(
             "5 - Packs Hints",
             "Disinf color",
             "87a0e1",
-            "DISINF pack hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
+            "DISINF pack capacity color as RRGGBB or RRGGBBAA. Example: FF3355.");
     }
 
-    public bool Update(Transform? parent, int layer, bool inHudContext, float crosshairDiameter)
+    public bool Update(Transform? parent, int layer, bool inHudContext)
     {
-        if (!Enabled.Value || !inHudContext || !TryGetHeldPack(out var naming, out var capacity, out var color, out var colorHex))
+        if (!Enabled.Value || !inHudContext || !TryGetHeldPack(out var capacity, out var color, out var colorHex))
         {
             Hide();
             return false;
@@ -105,51 +91,34 @@ internal sealed class PackHintOverlay
         if (!Alive(parent))
             return false;
 
-        if (!Alive(_namingText))
-            _namingText = Create(parent!, layer, "Pack Naming Hint", new Vector2(0.5f, 1f), TextAlignmentOptions.Top);
         if (!Alive(_capacityText))
             _capacityText = Create(parent!, layer, "Pack Capacity Hint", new Vector2(0.5f, 0.5f), TextAlignmentOptions.Center);
-        if (!Alive(_namingText) || !Alive(_capacityText))
+        if (!Alive(_capacityText))
             return false;
 
         var size = Mathf.Clamp(Size.Value, 2, 48);
-        var namingSize = Mathf.Max(2, Mathf.RoundToInt(size * NamingSizeScale));
-        var capacitySize = Mathf.Max(2, Mathf.RoundToInt(size * CapacitySizeScale));
-        var margin = Mathf.Clamp(Margin.Value, 0f, 48f);
         var opacity = Mathf.Clamp01(Opacity.Value);
         color.a *= opacity;
         var styleChanged = colorHex != _appliedColorHex
             || size != _appliedSize
             || !Mathf.Approximately(opacity, _appliedOpacity);
         ApplyLabel(
-            _namingText!,
-            naming,
-            color,
-            namingSize,
-            new Vector2(0f, -(crosshairDiameter * 0.5f + margin)),
-            ref _appliedNaming,
-            updateLayout: naming != _appliedNaming
-                || styleChanged
-                || !Mathf.Approximately(margin, _appliedMargin));
-        ApplyLabel(
             _capacityText!,
             capacity,
             color,
-            capacitySize,
+            size,
             Vector2.zero,
             ref _appliedCapacity,
             updateLayout: capacity != _appliedCapacity || styleChanged);
 
         _appliedColorHex = colorHex;
         _appliedSize = size;
-        _appliedMargin = margin;
         _appliedOpacity = opacity;
         return true;
     }
 
     public void Detach()
     {
-        DestroyText(ref _namingText);
         DestroyText(ref _capacityText);
         ResetAppliedStyle();
     }
@@ -157,7 +126,6 @@ internal sealed class PackHintOverlay
     private void Hide()
     {
         ResetAppliedStyle();
-        HideText(_namingText);
         HideText(_capacityText);
     }
 
@@ -245,9 +213,8 @@ internal sealed class PackHintOverlay
         }
     }
 
-    private bool TryGetHeldPack(out string naming, out string capacity, out Color color, out string colorHex)
+    private bool TryGetHeldPack(out string capacity, out Color color, out string colorHex)
     {
-        naming = string.Empty;
         capacity = string.Empty;
         color = Color.white;
         colorHex = string.Empty;
@@ -266,7 +233,7 @@ internal sealed class PackHintOverlay
                 return false;
 
             var pack = item!.TryCast<ResourcePackFirstPerson>();
-            if (!Alive(pack) || !TryGetPackStyle(pack!.m_packType, out naming, out color, out colorHex))
+            if (!Alive(pack) || !TryGetPackStyle(pack!.m_packType, out color, out colorHex))
                 return false;
 
             capacity = RemainingUses(pack!).ToString();
@@ -281,7 +248,6 @@ internal sealed class PackHintOverlay
 
     private static bool TryGetPackStyle(
         eResourceContainerSpawnType packType,
-        out string naming,
         out Color color,
         out string colorHex)
     {
@@ -290,25 +256,20 @@ internal sealed class PackHintOverlay
             case eResourceContainerSpawnType.AmmoTool:
                 colorHex = ToolColorHex.Value;
                 color = ParseColor(colorHex, new Color(0.431f, 0.800f, 1f, 1f));
-                naming = "TOOL";
                 return true;
             case eResourceContainerSpawnType.Health:
                 colorHex = MedColorHex.Value;
                 color = ParseColor(colorHex, new Color(1f, 0.470588f, 0.576471f, 1f));
-                naming = "HP";
                 return true;
             case eResourceContainerSpawnType.AmmoWeapon:
                 colorHex = AmmoColorHex.Value;
                 color = ParseColor(colorHex, new Color(0.878f, 0.831f, 0.537f, 1f));
-                naming = "AMMO";
                 return true;
             case eResourceContainerSpawnType.Disinfection:
                 colorHex = DisinfColorHex.Value;
                 color = ParseColor(colorHex, new Color(0.529f, 0.627f, 0.882f, 1f));
-                naming = "DISINF";
                 return true;
             default:
-                naming = string.Empty;
                 color = Color.white;
                 colorHex = string.Empty;
                 return false;
@@ -358,11 +319,9 @@ internal sealed class PackHintOverlay
 
     private void ResetAppliedStyle()
     {
-        _appliedNaming = null;
         _appliedCapacity = null;
         _appliedColorHex = null;
         _appliedSize = -1;
-        _appliedMargin = -1f;
         _appliedOpacity = -1f;
     }
 
