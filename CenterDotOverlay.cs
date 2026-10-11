@@ -22,8 +22,8 @@ namespace V921;
 /// a viewport point around (0.5, 0.5). That offset is added in canvas space on top of
 /// the sway rest position. Shotguns stay centered: their pellets follow the camera.
 ///
-/// A same-colored room swallows the fill. A black ring and a complementary ring sit
-/// behind it, so one of the two edges still reads against that light.
+/// A same-colored room swallows the fill. A black ring and a configurable outer ring
+/// sit behind it, so an edge still reads against that light.
 ///
 /// Shown only when all of these are true:
 /// - <see cref="GameStateManager.CurrentStateName"/> is <see cref="eGameStateName.InLevel"/>
@@ -40,6 +40,9 @@ internal class CenterDotOverlay : MonoBehaviour
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
     public static ConfigEntry<float> Opacity { get; private set; } = null!;
+    public static ConfigEntry<string> OutlineColorHex { get; private set; } = null!;
+    public static ConfigEntry<int> OutlineSize { get; private set; } = null!;
+    public static ConfigEntry<float> OutlineOpacity { get; private set; } = null!;
 
     /// <summary>
     /// The crosshair layer's vertical mapping does not match view space.
@@ -62,6 +65,9 @@ internal class CenterDotOverlay : MonoBehaviour
     private string? _appliedHex;
     private int _appliedSize = -1;
     private float _appliedOpacity = -1f;
+    private string? _appliedOutlineHex;
+    private int _appliedOutlineSize = -1;
+    private float _appliedOutlineOpacity = -1f;
     private bool _stateErrorLogged;
     private bool _scopeErrorLogged;
     private bool _recoilErrorLogged;
@@ -103,7 +109,7 @@ internal class CenterDotOverlay : MonoBehaviour
             "Size",
             3,
             new ConfigDescription(
-                "Colored dot diameter in HUD units. A dark ring and a complementary ring are drawn behind it.",
+                "Colored dot diameter in HUD units. A dark ring and the outline are drawn behind it.",
                 new AcceptableValueRange<int>(1, 32)));
 
         Opacity = config.Bind(
@@ -112,6 +118,28 @@ internal class CenterDotOverlay : MonoBehaviour
             0.9f,
             new ConfigDescription(
                 "Dot opacity. 0 is invisible, 1 is solid.",
+                new AcceptableValueRange<float>(0f, 1f)));
+
+        OutlineColorHex = config.Bind(
+            "Center dot",
+            "Outline color",
+            "FF3355",
+            "Outer ring color as RRGGBB or RRGGBBAA. Example: FF3355.");
+
+        OutlineSize = config.Bind(
+            "Center dot",
+            "Outline size",
+            9,
+            new ConfigDescription(
+                "Outer ring diameter in HUD units. Larger than the dot size, so the ring stays visible around the fill.",
+                new AcceptableValueRange<int>(1, 64)));
+
+        OutlineOpacity = config.Bind(
+            "Center dot",
+            "Outline opacity",
+            1f,
+            new ConfigDescription(
+                "Outer ring opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
     }
 
@@ -507,6 +535,9 @@ internal class CenterDotOverlay : MonoBehaviour
             _appliedHex = null;
             _appliedSize = -1;
             _appliedOpacity = -1f;
+            _appliedOutlineHex = null;
+            _appliedOutlineSize = -1;
+            _appliedOutlineOpacity = -1f;
             ApplyStyle();
             _root.SetActive(false);
             Plugin.Instance.Log.LogInfo($"Center aim dot attached to HUD group '{parent.name}'.");
@@ -541,6 +572,9 @@ internal class CenterDotOverlay : MonoBehaviour
         _appliedHex = null;
         _appliedSize = -1;
         _appliedOpacity = -1f;
+        _appliedOutlineHex = null;
+        _appliedOutlineSize = -1;
+        _appliedOutlineOpacity = -1f;
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)
@@ -656,33 +690,31 @@ internal class CenterDotOverlay : MonoBehaviour
         var hex = ColorHex.Value;
         var size = Mathf.Clamp(Size.Value, 1, 32);
         var opacity = Mathf.Clamp01(Opacity.Value);
-        if (hex == _appliedHex && size == _appliedSize && Mathf.Approximately(opacity, _appliedOpacity))
+        var outlineHex = OutlineColorHex.Value;
+        var outlineSize = Mathf.Clamp(OutlineSize.Value, 1, 64);
+        var outlineOpacity = Mathf.Clamp01(OutlineOpacity.Value);
+        if (hex == _appliedHex
+            && size == _appliedSize
+            && Mathf.Approximately(opacity, _appliedOpacity)
+            && outlineHex == _appliedOutlineHex
+            && outlineSize == _appliedOutlineSize
+            && Mathf.Approximately(outlineOpacity, _appliedOutlineOpacity))
             return;
 
         _appliedHex = hex;
         _appliedSize = size;
         _appliedOpacity = opacity;
+        _appliedOutlineHex = outlineHex;
+        _appliedOutlineSize = outlineSize;
+        _appliedOutlineOpacity = outlineOpacity;
 
         var color = ParseColor(hex);
         color.a *= opacity;
-        var contrast = ContrastColor(color);
-        contrast.a *= opacity;
-        SetSprite(_halo, contrast, size + 6);
+        var outline = ParseColor(outlineHex, new Color(1f, 0.2f, 0.333f, 1f));
+        outline.a *= outlineOpacity;
+        SetSprite(_halo, outline, outlineSize);
         SetSprite(_outline, new Color(0f, 0f, 0f, opacity), size + 3);
         SetSprite(_dot, color, size);
-    }
-
-    /// <summary>
-    /// Opposite hue of the dot. A cyan room hides a cyan fill, and this ring stays visible there.
-    /// Gray dots have no opposite hue, so the ring flips between black and white instead.
-    /// </summary>
-    private static Color ContrastColor(Color dot)
-    {
-        Color.RGBToHSV(dot, out var hue, out var saturation, out var value);
-        if (saturation < 0.2f)
-            return value >= 0.5f ? Color.black : Color.white;
-
-        return Color.HSVToRGB(Mathf.Repeat(hue + 0.5f, 1f), 1f, 1f);
     }
 
     private static void SetSprite(UI_Sprite ui, Color color, float size)
@@ -701,16 +733,17 @@ internal class CenterDotOverlay : MonoBehaviour
             renderer.transform.localScale = new Vector3(size, size, 1f);
     }
 
-    private static Color ParseColor(string raw)
+    private static Color ParseColor(string raw, Color? fallback = null)
     {
+        var missing = fallback ?? DefaultColor();
         var text = (raw ?? string.Empty).Trim();
         if (text.Length == 0)
-            return DefaultColor();
+            return missing;
 
         if (!text.StartsWith("#", StringComparison.Ordinal))
             text = "#" + text;
 
-        return ColorUtility.TryParseHtmlString(text, out var color) ? color : DefaultColor();
+        return ColorUtility.TryParseHtmlString(text, out var color) ? color : missing;
     }
 
     private static Color DefaultColor()
