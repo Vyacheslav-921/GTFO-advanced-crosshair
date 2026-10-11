@@ -96,6 +96,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private UI_Sprite? _hintShape;
     private readonly PackHintOverlay _packHints = new();
     private readonly ItemHintOverlay _itemHints = new();
+    private readonly ToolHintOverlay _toolHints = new();
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -120,6 +121,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private float _appliedCenterThickness = -1f;
     private float _appliedOutlineThickness = -1f;
     private float _appliedHintThickness = -1f;
+    private Sprite? _appliedHintSprite;
     private ReticleShape? _appliedCenterShape;
     private ReticleShape? _appliedOutlineShape;
     private bool _stateErrorLogged;
@@ -388,7 +390,8 @@ internal class CrosshairOverlay : MonoBehaviour
         var crosshairDiameter = CurrentCrosshairDiameter();
         var showPackHint = _packHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
         var showItemHint = _itemHints.Update(hintParent, hintLayer, inHudContext, crosshairDiameter);
-        var showRoot = showCrosshair || showPackHint || showItemHint;
+        var showToolHint = _toolHints.Update(hintParent, hintLayer, inHudContext);
+        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint;
         if (showCrosshair)
         {
             if (!_crosshairShapesActive)
@@ -839,6 +842,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 out _outlineLinesSprite);
             ApplyHintThickness(hintThickness);
             var sprite = _centerCircleSprite!;
+            var hintSprite = SelectedHintSprite() ?? _hintCircleSprite!;
 
             root = new GameObject("GTFO Crosshair");
             var rect = root.AddComponent<RectTransform>();
@@ -852,7 +856,8 @@ internal class CrosshairOverlay : MonoBehaviour
 
             _centerShape = CreateSprite(rect, sprite, "Center Shape", layer, reference);
             _outlineShape = CreateSprite(rect, sprite, "Outline Shape", layer, reference);
-            _hintShape = CreateSprite(rect, _hintCircleSprite!, "Hint Shape", layer, reference);
+            _hintShape = CreateSprite(rect, hintSprite, "Hint Shape", layer, reference);
+            _appliedHintSprite = hintSprite;
             if (reference != null
                 && _centerShape.m_sprite != null
                 && _outlineShape.m_sprite != null
@@ -901,6 +906,7 @@ internal class CrosshairOverlay : MonoBehaviour
             _hintArcsSprite = null;
             _hintLinesSprite = null;
             _hintCircleSprite = null;
+            _appliedHintSprite = null;
             _parentPtr = IntPtr.Zero;
             if (root != null)
                 Destroy(root);
@@ -943,6 +949,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedCenterThickness = -1f;
         _appliedOutlineThickness = -1f;
         _appliedHintThickness = -1f;
+        _appliedHintSprite = null;
         _appliedCenterShape = null;
         _appliedOutlineShape = null;
         _hintChargeActive = false;
@@ -956,6 +963,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _autoAttackBlinkTriggers = 0;
         _packHints.Detach();
         _itemHints.Detach();
+        _toolHints.Detach();
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)
@@ -1435,9 +1443,7 @@ internal class CrosshairOverlay : MonoBehaviour
             diameter,
             baseThickness,
             _appliedHintThickness);
-        var renderer = _hintShape?.m_sprite;
-        if (renderer != null)
-            renderer.sprite = SelectedHintSprite();
+        ApplyHintSprite();
         if (autoStrikeWarningProgress > 0f)
         {
             var autoAttackColor = ParseColor(HintAutoAttackColorHex.Value, Color.white);
@@ -1450,10 +1456,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private void ShowHintAtOriginalSize()
     {
         ApplyHintThickness(Mathf.Clamp(HintThickness.Value, 0.5f, 16f));
-        var renderer = _hintShape?.m_sprite;
-        if (renderer != null)
-            renderer.sprite = SelectedHintSprite();
-
+        ApplyHintSprite();
         SetSprite(_hintShape!, ConfiguredHintColor(), HintOriginalSize(CurrentCrosshairDiameter()));
     }
 
@@ -1481,6 +1484,22 @@ internal class CrosshairOverlay : MonoBehaviour
         return Mathf.Max(
             Mathf.Clamp(HintSize.Value, 8, 64),
             crosshairDiameter + HintReadyPadding);
+    }
+
+    /// <summary>
+    /// The visor blit keeps the sprite mesh from the last HUD gather. The configured
+    /// shape has to be on the renderer before that gather, and a later swap has to ask for another one.
+    /// </summary>
+    private void ApplyHintSprite()
+    {
+        var sprite = SelectedHintSprite();
+        var renderer = _hintShape?.m_sprite;
+        if (renderer == null || sprite == null || ReferenceEquals(sprite, _appliedHintSprite))
+            return;
+
+        renderer.sprite = sprite;
+        _appliedHintSprite = sprite;
+        RefreshHudPass();
     }
 
     private Sprite? SelectedHintSprite()

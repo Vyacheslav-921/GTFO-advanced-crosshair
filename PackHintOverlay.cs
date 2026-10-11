@@ -16,6 +16,7 @@ internal sealed class PackHintOverlay
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
     public static ConfigEntry<float> Margin { get; private set; } = null!;
+    public static ConfigEntry<float> Opacity { get; private set; } = null!;
     public static ConfigEntry<string> ToolColorHex { get; private set; } = null!;
     public static ConfigEntry<string> MedColorHex { get; private set; } = null!;
     public static ConfigEntry<string> AmmoColorHex { get; private set; } = null!;
@@ -33,6 +34,7 @@ internal sealed class PackHintOverlay
     private string? _appliedColorHex;
     private int _appliedSize = -1;
     private float _appliedMargin = -1f;
+    private float _appliedOpacity = -1f;
     private bool _errorLogged;
 
     public static void Bind(ConfigFile config)
@@ -58,6 +60,14 @@ internal sealed class PackHintOverlay
             new ConfigDescription(
                 "Distance from the crosshair's outer edge to the pack naming hint. Capacity hint stays at the center.",
                 new AcceptableValueRange<float>(0f, 48f)));
+
+        Opacity = config.Bind(
+            "5 - Packs Hints",
+            "Opacity",
+            0.7f,
+            new ConfigDescription(
+                "Pack hint text opacity. 0 is invisible, 1 is solid.",
+                new AcceptableValueRange<float>(0f, 1f)));
 
         ToolColorHex = config.Bind(
             "5 - Packs Hints",
@@ -106,6 +116,11 @@ internal sealed class PackHintOverlay
         var namingSize = Mathf.Max(2, Mathf.RoundToInt(size * NamingSizeScale));
         var capacitySize = Mathf.Max(2, Mathf.RoundToInt(size * CapacitySizeScale));
         var margin = Mathf.Clamp(Margin.Value, 0f, 48f);
+        var opacity = Mathf.Clamp01(Opacity.Value);
+        color.a *= opacity;
+        var styleChanged = colorHex != _appliedColorHex
+            || size != _appliedSize
+            || !Mathf.Approximately(opacity, _appliedOpacity);
         ApplyLabel(
             _namingText!,
             naming,
@@ -114,8 +129,7 @@ internal sealed class PackHintOverlay
             new Vector2(0f, -(crosshairDiameter * 0.5f + margin)),
             ref _appliedNaming,
             updateLayout: naming != _appliedNaming
-                || colorHex != _appliedColorHex
-                || size != _appliedSize
+                || styleChanged
                 || !Mathf.Approximately(margin, _appliedMargin));
         ApplyLabel(
             _capacityText!,
@@ -124,13 +138,12 @@ internal sealed class PackHintOverlay
             capacitySize,
             Vector2.zero,
             ref _appliedCapacity,
-            updateLayout: capacity != _appliedCapacity
-                || colorHex != _appliedColorHex
-                || size != _appliedSize);
+            updateLayout: capacity != _appliedCapacity || styleChanged);
 
         _appliedColorHex = colorHex;
         _appliedSize = size;
         _appliedMargin = margin;
+        _appliedOpacity = opacity;
         return true;
     }
 
@@ -256,7 +269,7 @@ internal sealed class PackHintOverlay
             if (!Alive(pack) || !TryGetPackStyle(pack!.m_packType, out naming, out color, out colorHex))
                 return false;
 
-            capacity = RemainingUses(player).ToString();
+            capacity = RemainingUses(pack!).ToString();
             return true;
         }
         catch (Exception ex)
@@ -302,20 +315,45 @@ internal sealed class PackHintOverlay
         }
     }
 
-    private static int RemainingUses(PlayerAgent player)
+    private static int RemainingUses(ResourcePackFirstPerson pack)
     {
         var backpack = PlayerBackpackManager.LocalBackpack;
         if (!Alive(backpack) || !Alive(backpack!.AmmoStorage) || !Alive(backpack.AmmoStorage!.ResourcePackAmmo))
             return 0;
 
         var ammo = backpack.AmmoStorage.ResourcePackAmmo!;
+        if (pack.m_packType == eResourceContainerSpawnType.AmmoTool)
+            return ToolPackUses(ammo);
+
         if (ammo.BulletsInPack > 0)
             return ammo.BulletsInPack;
 
         if (ammo.CostOfBullet > 0.0001f)
             return Mathf.Max(0, Mathf.RoundToInt(ammo.AmmoInPack / ammo.CostOfBullet));
 
-        return Mathf.Max(0, Mathf.RoundToInt(ammo.RelInPack * 100f));
+        return ammo.AmmoInPack > 0.0001f ? 1 : 0;
+    }
+
+    /// <summary>
+    /// A tool refill stores a fraction of class-tool ammo. That fraction is not the charge count.
+    /// Charges are the bullet total only while the slot's maximum stays in pack-use range.
+    /// </summary>
+    private static int ToolPackUses(InventorySlotAmmo ammo)
+    {
+        if (ammo.CostOfBullet > 0.0001f && ammo.AmmoMaxCap > 0.0001f)
+        {
+            var maxUses = Mathf.FloorToInt((ammo.AmmoMaxCap / ammo.CostOfBullet) + 0.001f);
+            if (maxUses > 0 && maxUses <= 20)
+            {
+                var uses = Mathf.FloorToInt((ammo.AmmoInPack / ammo.CostOfBullet) + 0.001f);
+                return Mathf.Clamp(uses, 0, maxUses);
+            }
+        }
+
+        if (ammo.BulletsMaxCap > 0 && ammo.BulletsMaxCap <= 20)
+            return Mathf.Clamp(ammo.BulletsInPack, 0, ammo.BulletsMaxCap);
+
+        return ammo.AmmoInPack > 0.0001f || ammo.RelInPack > 0.0001f ? 1 : 0;
     }
 
     private void ResetAppliedStyle()
@@ -325,6 +363,7 @@ internal sealed class PackHintOverlay
         _appliedColorHex = null;
         _appliedSize = -1;
         _appliedMargin = -1f;
+        _appliedOpacity = -1f;
     }
 
     private static void HideText(TextMeshPro? text)

@@ -39,6 +39,7 @@ public class Plugin : BasePlugin
         CrosshairOverlay.Bind(Config);
         PackHintOverlay.Bind(Config);
         ItemHintOverlay.Bind(Config);
+        ToolHintOverlay.Bind(Config);
         AddComponent<CrosshairOverlay>();
         Log.LogInfo("Crosshair overlay ready (awaits player HUD).");
 

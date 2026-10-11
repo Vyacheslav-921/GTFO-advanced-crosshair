@@ -18,6 +18,7 @@ internal sealed class ItemHintOverlay
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
     public static ConfigEntry<float> Margin { get; private set; } = null!;
+    public static ConfigEntry<float> Opacity { get; private set; } = null!;
     public static ConfigEntry<string> GlowColorHex { get; private set; } = null!;
     public static ConfigEntry<string> FogColorHex { get; private set; } = null!;
     public static ConfigEntry<string> FoamColorHex { get; private set; } = null!;
@@ -32,7 +33,7 @@ internal sealed class ItemHintOverlay
     private const float TmpPointsPerHudUnit = 10f;
     private const float NamingSizeScale = 1.2f;
     private const float CapacitySizeScale = 1.1f;
-    private const float ColorSaturationBoost = 1.3f;
+    private const float ColorSaturationBoost = 1.1f;
 
     private enum ItemHintKind
     {
@@ -55,6 +56,7 @@ internal sealed class ItemHintOverlay
     private string? _appliedColorHex;
     private int _appliedSize = -1;
     private float _appliedMargin = -1f;
+    private float _appliedOpacity = -1f;
     private bool _errorLogged;
 
     public static void Bind(ConfigFile config)
@@ -82,6 +84,14 @@ internal sealed class ItemHintOverlay
             new ConfigDescription(
                 "Distance from the crosshair's outer edge to the item naming hint. Count hint stays at the center.",
                 new AcceptableValueRange<float>(0f, 48f)));
+
+        Opacity = config.Bind(
+            section,
+            "Opacity",
+            0.7f,
+            new ConfigDescription(
+                "Item hint text opacity. 0 is invisible, 1 is solid.",
+                new AcceptableValueRange<float>(0f, 1f)));
 
         GlowColorHex = BindColor(config, section, "Glow color", "GLOW", "6affeb");
         FogColorHex = BindColor(config, section, "Fog color", "FOG", "93c9c1");
@@ -117,6 +127,11 @@ internal sealed class ItemHintOverlay
         var namingSize = Mathf.Max(2, Mathf.RoundToInt(size * NamingSizeScale));
         var capacitySize = Mathf.Max(2, Mathf.RoundToInt(size * CapacitySizeScale));
         var margin = Mathf.Clamp(Margin.Value, 0f, 48f);
+        var opacity = Mathf.Clamp01(Opacity.Value);
+        color.a *= opacity;
+        var styleChanged = colorHex != _appliedColorHex
+            || size != _appliedSize
+            || !Mathf.Approximately(opacity, _appliedOpacity);
         ApplyLabel(
             _namingText!,
             naming,
@@ -125,8 +140,7 @@ internal sealed class ItemHintOverlay
             new Vector2(0f, -(crosshairDiameter * 0.5f + margin)),
             ref _appliedNaming,
             updateLayout: naming != _appliedNaming
-                || colorHex != _appliedColorHex
-                || size != _appliedSize
+                || styleChanged
                 || !Mathf.Approximately(margin, _appliedMargin));
         ApplyLabel(
             _capacityText!,
@@ -135,13 +149,12 @@ internal sealed class ItemHintOverlay
             capacitySize,
             Vector2.zero,
             ref _appliedCapacity,
-            updateLayout: capacity != _appliedCapacity
-                || colorHex != _appliedColorHex
-                || size != _appliedSize);
+            updateLayout: capacity != _appliedCapacity || styleChanged);
 
         _appliedColorHex = colorHex;
         _appliedSize = size;
         _appliedMargin = margin;
+        _appliedOpacity = opacity;
         return true;
     }
 
@@ -453,14 +466,15 @@ internal sealed class ItemHintOverlay
         return text.Contains(token, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Glow sticks and fog repellers report <see cref="AmmoType.CurrentConsumable"/>.
+    /// The lock melter does not, so it uses that same consumable pool.
+    /// </summary>
     private static int RemainingUses(ItemEquippable item)
     {
         var ammoType = item.AmmoType;
         if (ammoType == AmmoType.None)
-        {
-            var clip = item.GetCurrentClip();
-            return clip > 0 ? clip : 1;
-        }
+            ammoType = AmmoType.CurrentConsumable;
 
         var backpack = PlayerBackpackManager.LocalBackpack;
         if (!Alive(backpack) || !Alive(backpack!.AmmoStorage))
@@ -486,6 +500,7 @@ internal sealed class ItemHintOverlay
         _appliedColorHex = null;
         _appliedSize = -1;
         _appliedMargin = -1f;
+        _appliedOpacity = -1f;
     }
 
     private static void HideText(TextMeshPro? text)
