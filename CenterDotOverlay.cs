@@ -13,6 +13,7 @@ internal enum MeleeChargeHintShape
 {
     Dots,
     Arcs,
+    Lines,
     Circle
 }
 
@@ -55,6 +56,7 @@ internal class CenterDotOverlay : MonoBehaviour
     public static ConfigEntry<float> OutlineOpacity { get; private set; } = null!;
     public static ConfigEntry<bool> MeleeChargeFeedback { get; private set; } = null!;
     public static ConfigEntry<MeleeChargeHintShape> MeleeChargeShape { get; private set; } = null!;
+    public static ConfigEntry<string> MeleeChargeHintColorHex { get; private set; } = null!;
     public static ConfigEntry<int> MeleeChargeRingSize { get; private set; } = null!;
     public static ConfigEntry<float> MeleeChargeRingOpacity { get; private set; } = null!;
 
@@ -78,6 +80,7 @@ internal class CenterDotOverlay : MonoBehaviour
     private UI_Sprite? _chargeRing;
     private Sprite? _chargeDotsSprite;
     private Sprite? _chargeSemicirclesSprite;
+    private Sprite? _chargeLinesSprite;
     private Sprite? _chargeCircleSprite;
     private float _nextCreateAttempt;
     private string? _appliedHex;
@@ -173,7 +176,13 @@ internal class CenterDotOverlay : MonoBehaviour
             "Center dot",
             "Melee charge hint shape",
             MeleeChargeHintShape.Circle,
-            "Shape of the shrinking melee charge hint: Dots, Arcs, or Circle.");
+            "Shape of the shrinking melee charge hint: Dots, Arcs, Lines, or Circle.");
+
+        MeleeChargeHintColorHex = config.Bind(
+            "Center dot",
+            "Melee charge hint color",
+            "e5c369",
+            "Melee charge hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         MeleeChargeRingSize = config.Bind(
             "Center dot",
@@ -567,6 +576,7 @@ internal class CenterDotOverlay : MonoBehaviour
             var sprite = CircleSprite();
             _chargeDotsSprite = ChargeHintSprite(MeleeChargeHintShape.Dots);
             _chargeSemicirclesSprite = ChargeHintSprite(MeleeChargeHintShape.Arcs);
+            _chargeLinesSprite = ChargeHintSprite(MeleeChargeHintShape.Lines);
             _chargeCircleSprite = ChargeHintSprite(MeleeChargeHintShape.Circle);
 
             root = new GameObject("GTFO Center Aim Dot");
@@ -618,6 +628,7 @@ internal class CenterDotOverlay : MonoBehaviour
             _chargeRing = null;
             _chargeDotsSprite = null;
             _chargeSemicirclesSprite = null;
+            _chargeLinesSprite = null;
             _chargeCircleSprite = null;
             _parentPtr = IntPtr.Zero;
             if (root != null)
@@ -641,6 +652,7 @@ internal class CenterDotOverlay : MonoBehaviour
         _chargeRing = null;
         _chargeDotsSprite = null;
         _chargeSemicirclesSprite = null;
+        _chargeLinesSprite = null;
         _chargeCircleSprite = null;
         _parentPtr = IntPtr.Zero;
         _appliedHex = null;
@@ -720,7 +732,6 @@ internal class CenterDotOverlay : MonoBehaviour
                 return;
 
             pass!.UpdateRenderingData = true;
-            pass.GatherRenderingData();
         }
         catch (Exception ex)
         {
@@ -786,7 +797,15 @@ internal class CenterDotOverlay : MonoBehaviour
                         alpha = Mathf.Clamp01(dotRadius + 0.5f - Mathf.Min(leftDistance, rightDistance));
                         break;
                     case MeleeChargeHintShape.Arcs:
-                        alpha = ringAlpha * Mathf.Clamp01(Mathf.Abs(dx) - 1.5f);
+                        alpha = ringAlpha * Mathf.Clamp01(Mathf.Abs(dx) - radius * 0.68f);
+                        break;
+                    case MeleeChargeHintShape.Lines:
+                        var leftLineDistance = Mathf.Abs(dx + dotOffset);
+                        var rightLineDistance = Mathf.Abs(dx - dotOffset);
+                        var lineAlpha = Mathf.Clamp01(
+                            thickness - Mathf.Min(leftLineDistance, rightLineDistance));
+                        var lineLength = Mathf.Clamp01(radius * 0.72f + 0.5f - Mathf.Abs(dy));
+                        alpha = lineAlpha * lineLength;
                         break;
                     default:
                         alpha = ringAlpha;
@@ -867,7 +886,8 @@ internal class CenterDotOverlay : MonoBehaviour
     /// </summary>
     private void ApplyMeleeChargeCue()
     {
-        if (!MeleeChargeFeedback.Value || !TryGetMeleeCharge(out var progress, out var statePtr))
+        if (!MeleeChargeFeedback.Value
+            || !TryGetMeleeCharge(out var progress, out var autoStrikeWarningProgress, out var statePtr))
         {
             if (_chargeCueActive)
                 EndChargeCue();
@@ -890,10 +910,21 @@ internal class CenterDotOverlay : MonoBehaviour
         var diameter = chargeJustStarted
             ? targetSize
             : Mathf.Lerp(targetSize, crosshairDiameter, progress);
-        var color = new Color(1f, 0.05f, 0.08f, Mathf.Clamp01(MeleeChargeRingOpacity.Value));
+        var color = ParseColor(MeleeChargeHintColorHex.Value, new Color(1f, 0.05f, 0.08f, 1f));
+        color.a *= Mathf.Clamp01(MeleeChargeRingOpacity.Value);
         var renderer = _chargeRing?.m_sprite;
         if (renderer != null)
             renderer.sprite = SelectedChargeHintSprite();
+        if (autoStrikeWarningProgress > 0f)
+        {
+            ReadConfiguredColors(out var halo, out var ring, out var dot);
+            var easedWarning = autoStrikeWarningProgress * autoStrikeWarningProgress;
+            PaintSprites(
+                Color.Lerp(halo, InvertAndBrighten(halo), easedWarning),
+                Color.Lerp(ring, InvertAndBrighten(ring), easedWarning),
+                Color.Lerp(dot, InvertAndBrighten(dot), easedWarning));
+            color = Color.Lerp(color, InvertAndBrighten(color), easedWarning);
+        }
         SetSprite(_chargeRing!, color, diameter);
     }
 
@@ -903,6 +934,7 @@ internal class CenterDotOverlay : MonoBehaviour
         {
             MeleeChargeHintShape.Dots => _chargeDotsSprite,
             MeleeChargeHintShape.Arcs => _chargeSemicirclesSprite,
+            MeleeChargeHintShape.Lines => _chargeLinesSprite,
             _ => _chargeCircleSprite
         };
     }
@@ -912,11 +944,14 @@ internal class CenterDotOverlay : MonoBehaviour
         _chargeCueActive = false;
         _chargeStatePtr = IntPtr.Zero;
         HideChargeRing();
+        _appliedHex = null;
+        ApplyStyle();
     }
 
-    private bool TryGetMeleeCharge(out float progress, out IntPtr statePtr)
+    private bool TryGetMeleeCharge(out float progress, out float autoStrikeWarningProgress, out IntPtr statePtr)
     {
         progress = 0f;
+        autoStrikeWarningProgress = 0f;
         statePtr = IntPtr.Zero;
 
         try
@@ -954,6 +989,18 @@ internal class CenterDotOverlay : MonoBehaviour
             var maxDamage = chargeUp.m_maxDamageTime;
             progress = maxDamage > 0.0001f ? Mathf.Clamp01(elapsed / maxDamage) : 1f;
 
+            var anim = melee.MeleeAnimationData;
+            if (Alive(anim))
+            {
+                var strikeAt = anim!.AutoAttackTime;
+                if (progress >= 1f && strikeAt > maxDamage)
+                {
+                    var warningDuration = strikeAt - maxDamage;
+                    autoStrikeWarningProgress = Mathf.Clamp01(
+                        (elapsed - maxDamage) / warningDuration);
+                }
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -973,6 +1020,40 @@ internal class CenterDotOverlay : MonoBehaviour
         var renderer = _chargeRing?.m_sprite;
         if (renderer != null)
             renderer.color = new Color(1f, 0.05f, 0.08f, 0f);
+    }
+
+    private void ReadConfiguredColors(out Color halo, out Color ring, out Color dot)
+    {
+        var opacity = Mathf.Clamp01(Opacity.Value);
+        var color = ParseColor(ColorHex.Value);
+        color.a *= opacity;
+        var outline = ParseColor(OutlineColorHex.Value, new Color(1f, 0.2f, 0.333f, 1f));
+        outline.a *= Mathf.Clamp01(OutlineOpacity.Value);
+        halo = outline;
+        ring = new Color(0f, 0f, 0f, opacity);
+        dot = color;
+    }
+
+    private static Color InvertAndBrighten(Color color)
+    {
+        var inverted = new Color(1f - color.r, 1f - color.g, 1f - color.b, 1f);
+        var bright = Color.Lerp(inverted, Color.white, 0.35f);
+        bright.a = 1f;
+        return bright;
+    }
+
+    private void PaintSprites(Color halo, Color ring, Color dot)
+    {
+        SetRendererColor(_halo, halo);
+        SetRendererColor(_outline, ring);
+        SetRendererColor(_dot, dot);
+    }
+
+    private static void SetRendererColor(UI_Sprite? ui, Color color)
+    {
+        var renderer = ui?.m_sprite;
+        if (renderer != null)
+            renderer.color = color;
     }
 
     private static Color ParseColor(string raw, Color? fallback = null)
