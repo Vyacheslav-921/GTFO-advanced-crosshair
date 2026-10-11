@@ -2,6 +2,7 @@ using System;
 using BepInEx.Configuration;
 using FirstPersonItem;
 using GameData;
+using Gear;
 using Il2CppInterop.Runtime.InteropTypes;
 using Player;
 using UnityEngine;
@@ -17,6 +18,10 @@ namespace V921;
 /// then registered with <see cref="UI_Core.UIPassHUD"/> so the visor blit
 /// (pixel, skew, opacity) includes it.
 ///
+/// Recoil that does not rotate the camera is <see cref="FPS_RecoilSystem.CurrentVSPos"/>,
+/// a viewport point around (0.5, 0.5). That offset is added in canvas space on top of
+/// the sway rest position. Shotguns stay centered: their pellets follow the camera.
+///
 /// Shown only when all of these are true:
 /// - <see cref="GameStateManager.CurrentStateName"/> is <see cref="eGameStateName.InLevel"/>
 /// - <see cref="FocusStateManager.CurrentState"/> is <see cref="eFocusState.FPS"/>
@@ -28,13 +33,24 @@ internal class CenterDotOverlay : MonoBehaviour
 
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<bool> HideWhenScoped { get; private set; } = null!;
+    public static ConfigEntry<bool> FollowRecoil { get; private set; } = null!;
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
     public static ConfigEntry<float> Opacity { get; private set; } = null!;
 
+    /// <summary>
+    /// The crosshair layer's vertical mapping does not match view space.
+    /// AccurateCrosshair uses this same correction so the reticle meets the recoil.
+    /// </summary>
+    private const float RecoilVerticalScale = 0.78f;
+
     private const float ScopeFovMargin = 2f;
 
+    internal static CenterDotOverlay? Current { get; private set; }
+
     private GameObject? _root;
+    private RectTransform? _rect;
+    private Vector2 _restAnchored;
     private IntPtr _parentPtr;
     private UI_Sprite? _outline;
     private UI_Sprite? _dot;
@@ -44,6 +60,7 @@ internal class CenterDotOverlay : MonoBehaviour
     private float _appliedOpacity = -1f;
     private bool _stateErrorLogged;
     private bool _scopeErrorLogged;
+    private bool _recoilErrorLogged;
     private float _hipLookFov;
     private bool _hasHipLookFov;
 
@@ -64,6 +81,12 @@ internal class CenterDotOverlay : MonoBehaviour
             "Hide when scoped",
             true,
             "Hide the dot while aiming through a magnified scope.");
+
+        FollowRecoil = config.Bind(
+            "Center dot",
+            "Follow recoil",
+            true,
+            "Move the dot with weapon recoil that does not follow the camera. Shotguns stay on the visor center.");
 
         ColorHex = config.Bind(
             "Center dot",
@@ -129,11 +152,119 @@ internal class CenterDotOverlay : MonoBehaviour
             _root.SetActive(show);
             RefreshHudPass();
         }
+
+        if (show)
+            ApplyRecoil();
+    }
+
+    private void OnEnable()
+    {
+        Current = this;
+    }
+
+    private void LateUpdate()
+    {
+        if (_root != null && _root.activeSelf)
+            ApplyRecoil();
+    }
+
+    /// <summary>
+    /// Called at the end of <see cref="FPS_RecoilSystem.FPS_Update"/> so the dot
+    /// uses the recoil point from this frame.
+    /// </summary>
+    internal void ApplyRecoil()
+    {
+        if (!Alive(_rect))
+            return;
+
+        if (!FollowRecoil.Value || !TryGetRecoilCanvasDelta(out var canvasDelta))
+        {
+            _rect!.anchoredPosition = _restAnchored;
+            return;
+        }
+
+        var canvas = CellCanvasRect();
+        var parent = _rect!.parent;
+        if (!Alive(canvas) || !Alive(parent))
+        {
+            _rect.anchoredPosition = _restAnchored;
+            return;
+        }
+
+        var worldDelta = canvas!.TransformVector(new Vector3(canvasDelta.x, canvasDelta.y, 0f));
+        var localDelta = parent!.InverseTransformVector(worldDelta);
+        _rect.anchoredPosition = _restAnchored + new Vector2(localDelta.x, localDelta.y);
     }
 
     private void OnDestroy()
     {
+        if (Current == this)
+            Current = null;
+
         DestroyRoot();
+    }
+
+    /// <summary>
+    /// Canvas-space offset from the visor center to <see cref="FPS_RecoilSystem.CurrentVSPos"/>.
+    /// </summary>
+    private bool TryGetRecoilCanvasDelta(out Vector2 canvasDelta)
+    {
+        canvasDelta = Vector2.zero;
+
+        try
+        {
+            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+                return false;
+
+            if (WieldingShotgun(player!))
+                return false;
+
+            var camera = player!.FPSCamera;
+            if (!Alive(camera))
+                return false;
+
+            var recoil = camera!.RecoilSystem;
+            if (!Alive(recoil))
+                return false;
+
+            var view = recoil!.CurrentVSPos;
+            if (view.x <= 0.001f && view.y <= 0.001f)
+                return false;
+
+            var centered = view - new Vector2(0.5f, 0.5f);
+            centered.y *= RecoilVerticalScale;
+
+            var canvas = CellCanvasRect();
+            if (!Alive(canvas))
+                return false;
+
+            var size = canvas!.rect.size;
+            canvasDelta = new Vector2(centered.x * size.x, centered.y * size.y);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (!_recoilErrorLogged)
+            {
+                _recoilErrorLogged = true;
+                Plugin.Instance.Log.LogWarning($"Center dot recoil follow failed: {ex.Message}");
+            }
+
+            return false;
+        }
+    }
+
+    private static bool WieldingShotgun(PlayerAgent player)
+    {
+        var holder = player.FPItemHolder;
+        if (!Alive(holder))
+            return false;
+
+        var item = holder!.WieldedItem;
+        if (!Alive(item))
+            return false;
+
+        return item!.TryCast<Shotgun>() != null;
     }
 
     /// <summary>
@@ -354,6 +485,8 @@ internal class CenterDotOverlay : MonoBehaviour
             rect.localScale = Vector3.one;
             rect.localRotation = Quaternion.identity;
             root.layer = layer;
+            _rect = rect;
+            _restAnchored = rect.anchoredPosition;
 
             _outline = CreateSprite(rect, sprite, "Outline", layer, reference);
             _dot = CreateSprite(rect, sprite, "Dot", layer, reference);
@@ -375,6 +508,7 @@ internal class CenterDotOverlay : MonoBehaviour
         catch (Exception ex)
         {
             _root = null;
+            _rect = null;
             _outline = null;
             _dot = null;
             _parentPtr = IntPtr.Zero;
@@ -391,6 +525,8 @@ internal class CenterDotOverlay : MonoBehaviour
             Destroy(_root);
 
         _root = null;
+        _rect = null;
+        _restAnchored = Vector2.zero;
         _outline = null;
         _dot = null;
         _parentPtr = IntPtr.Zero;
