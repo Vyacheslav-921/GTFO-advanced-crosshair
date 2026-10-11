@@ -216,7 +216,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterThickness = config.Bind(
             "2 - Center",
             "Thickness",
-            2.95f,
+            2.8f,
             new ConfigDescription(
                 "Center shape thickness. For Two dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
@@ -268,7 +268,7 @@ internal class CrosshairOverlay : MonoBehaviour
         OutlineThickness = config.Bind(
             "3 - Outline",
             "Thickness",
-            3.95f,
+            3.4f,
             new ConfigDescription(
                 "Outline shape thickness. For Two dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
