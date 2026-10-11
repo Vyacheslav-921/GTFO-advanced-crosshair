@@ -44,7 +44,9 @@ internal enum ReticleShape
 internal class CrosshairOverlay : MonoBehaviour
 {
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
-    public static ConfigEntry<bool> ShowWhenHoldingWeaponsOnly { get; private set; } = null!;
+    public static ConfigEntry<bool> ShowWeapons { get; private set; } = null!;
+    public static ConfigEntry<bool> ShowTools { get; private set; } = null!;
+    public static ConfigEntry<bool> ShowItems { get; private set; } = null!;
     public static ConfigEntry<bool> HideWhenScoped { get; private set; } = null!;
     public static ConfigEntry<bool> FollowRecoil { get; private set; } = null!;
     public static ConfigEntry<string> CenterShape { get; private set; } = null!;
@@ -130,31 +132,43 @@ internal class CrosshairOverlay : MonoBehaviour
     public static void Bind(ConfigFile config)
     {
         Enabled = config.Bind(
-            "1 - Center",
+            "1 - General",
             "Enabled",
             true,
             "Draw the crosshair while aiming in a level.");
 
-        ShowWhenHoldingWeaponsOnly = config.Bind(
-            "1 - Center",
-            "Weapons only",
+        ShowWeapons = config.Bind(
+            "Show for:",
+            "Weapons",
             true,
-            "Hide the crosshair while holding non-weapon items. Firearms and melee weapons are considered weapons.");
+            "Show the crosshair while holding a primary weapon, special weapon, or melee weapon.");
+
+        ShowTools = config.Bind(
+            "Show for:",
+            "Tools",
+            false,
+            "Show the crosshair while holding a class tool or the hacking tool.");
+
+        ShowItems = config.Bind(
+            "Show for:",
+            "Items",
+            false,
+            "Show the crosshair while holding consumables, resource packs, or carried objects.");
 
         HideWhenScoped = config.Bind(
-            "1 - Center",
+            "2 - Center",
             "Hide when scoped",
             true,
             "Hide the crosshair while aiming through a magnified scope.");
 
         FollowRecoil = config.Bind(
-            "1 - Center",
+            "2 - Center",
             "Follow recoil",
             true,
             "Move the crosshair center with weapon recoil that does not follow the camera. Shotguns stay centered.");
 
         CenterShape = config.Bind(
-            "1 - Center",
+            "2 - Center",
             "Shape",
             "Arcs",
             new ConfigDescription(
@@ -162,21 +176,21 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
 
         CenterColorHex = config.Bind(
-            "1 - Center",
+            "2 - Center",
             "Color",
             "5eb18e",
             "Center color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         CenterSize = config.Bind(
-            "1 - Center",
+            "2 - Center",
             "Size",
-            5,
+            4,
             new ConfigDescription(
                 "Center shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 32)));
 
         CenterThickness = config.Bind(
-            "1 - Center",
+            "2 - Center",
             "Thickness",
             4.5f,
             new ConfigDescription(
@@ -184,7 +198,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         CenterOpacity = config.Bind(
-            "1 - Center",
+            "2 - Center",
             "Opacity",
             0.7f,
             new ConfigDescription(
@@ -192,7 +206,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0f, 1f)));
 
         OutlineShape = config.Bind(
-            "2 - Outline",
+            "3 - Outline",
             "Shape",
             "Arcs",
             new ConfigDescription(
@@ -200,21 +214,21 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
 
         OutlineColorHex = config.Bind(
-            "2 - Outline",
+            "3 - Outline",
             "Color",
             "b00a22",
             "Outline color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         OutlineSize = config.Bind(
-            "2 - Outline",
+            "3 - Outline",
             "Size",
-            14,
+            10,
             new ConfigDescription(
                 "Outline shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 64)));
 
         OutlineThickness = config.Bind(
-            "2 - Outline",
+            "3 - Outline",
             "Thickness",
             4.5f,
             new ConfigDescription(
@@ -222,7 +236,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         OutlineOpacity = config.Bind(
-            "2 - Outline",
+            "3 - Outline",
             "Opacity",
             0.8f,
             new ConfigDescription(
@@ -230,7 +244,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0f, 1f)));
 
         OutlineSpacing = config.Bind(
-            "2 - Outline",
+            "3 - Outline",
             "Spacing",
             3f,
             new ConfigDescription(
@@ -238,19 +252,19 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0f, 32f)));
 
         HintEnabled = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Enabled",
             true,
             "Show the shrinking melee charge hint.");
 
         HintShowAlways = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Show always",
             false,
             "Keep the hint visible while no melee attack is charging.");
 
         HintShape = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Shape",
             "Arcs",
             new ConfigDescription(
@@ -258,19 +272,19 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
 
         HintColorHex = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Color",
             "e5c369",
             "Melee charge hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
         HintAutoAttackColorHex = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Auto attack color",
             "cb2769",
             "Hint color as an automatic melee attack approaches, as RRGGBB or RRGGBBAA.");
 
         HintAutoAttackThicknessIncrease = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Auto attack thickness increase",
             110f,
             new ConfigDescription(
@@ -278,7 +292,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0f, 200f)));
 
         HintSize = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Size",
             70,
             new ConfigDescription(
@@ -286,7 +300,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<int>(8, 64)));
 
         HintThickness = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Thickness",
             1.25f,
             new ConfigDescription(
@@ -294,7 +308,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         HintOpacity = config.Bind(
-            "3 - Hint",
+            "4 - Hint",
             "Opacity",
             0.8f,
             new ConfigDescription(
@@ -543,7 +557,7 @@ internal class CrosshairOverlay : MonoBehaviour
             if (FocusStateManager.CurrentState != eFocusState.FPS)
                 return false;
 
-            if (ShowWhenHoldingWeaponsOnly.Value && !WieldingWeapon())
+            if (!WieldedCategoryIsShown())
                 return false;
 
             return !HideWhenScoped.Value || !AimingThroughScope();
@@ -560,7 +574,7 @@ internal class CrosshairOverlay : MonoBehaviour
         }
     }
 
-    private static bool WieldingWeapon()
+    private static bool WieldedCategoryIsShown()
     {
         if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
             return false;
@@ -573,8 +587,22 @@ internal class CrosshairOverlay : MonoBehaviour
         if (!Alive(item))
             return false;
 
-        return Alive(item!.TryCast<BulletWeapon>())
-            || Alive(item.TryCast<MeleeWeaponFirstPerson>());
+        var data = item!.ItemDataBlock;
+        if (!Alive(data))
+            return false;
+
+        return data!.inventorySlot switch
+        {
+            InventorySlot.GearStandard or InventorySlot.GearSpecial or InventorySlot.GearMelee
+                => ShowWeapons.Value,
+            InventorySlot.GearClass or InventorySlot.HackingTool
+                => ShowTools.Value,
+            InventorySlot.ResourcePack or InventorySlot.Consumable
+                or InventorySlot.ConsumableHeavy or InventorySlot.InPocket
+                or InventorySlot.InLevelCarry or InventorySlot.Pickup
+                => ShowItems.Value,
+            _ => false
+        };
     }
 
     /// <summary>
