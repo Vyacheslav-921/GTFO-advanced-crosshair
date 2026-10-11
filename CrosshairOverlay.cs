@@ -44,6 +44,7 @@ internal enum ReticleShape
 internal class CrosshairOverlay : MonoBehaviour
 {
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
+    public static ConfigEntry<bool> ShowWhenHoldingWeaponsOnly { get; private set; } = null!;
     public static ConfigEntry<bool> HideWhenScoped { get; private set; } = null!;
     public static ConfigEntry<bool> FollowRecoil { get; private set; } = null!;
     public static ConfigEntry<string> CenterShape { get; private set; } = null!;
@@ -134,6 +135,12 @@ internal class CrosshairOverlay : MonoBehaviour
             true,
             "Draw the crosshair while aiming in a level.");
 
+        ShowWhenHoldingWeaponsOnly = config.Bind(
+            "1 - Center",
+            "Weapons only",
+            true,
+            "Hide the crosshair while holding non-weapon items. Firearms and melee weapons are considered weapons.");
+
         HideWhenScoped = config.Bind(
             "1 - Center",
             "Hide when scoped",
@@ -163,7 +170,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterSize = config.Bind(
             "1 - Center",
             "Size",
-            3,
+            5,
             new ConfigDescription(
                 "Center shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 32)));
@@ -179,7 +186,7 @@ internal class CrosshairOverlay : MonoBehaviour
         CenterOpacity = config.Bind(
             "1 - Center",
             "Opacity",
-            0.9f,
+            0.7f,
             new ConfigDescription(
                 "Center opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
@@ -201,7 +208,7 @@ internal class CrosshairOverlay : MonoBehaviour
         OutlineSize = config.Bind(
             "2 - Outline",
             "Size",
-            9,
+            14,
             new ConfigDescription(
                 "Outline shape diameter in HUD units.",
                 new AcceptableValueRange<int>(1, 64)));
@@ -536,6 +543,9 @@ internal class CrosshairOverlay : MonoBehaviour
             if (FocusStateManager.CurrentState != eFocusState.FPS)
                 return false;
 
+            if (ShowWhenHoldingWeaponsOnly.Value && !WieldingWeapon())
+                return false;
+
             return !HideWhenScoped.Value || !AimingThroughScope();
         }
         catch (Exception ex)
@@ -548,6 +558,23 @@ internal class CrosshairOverlay : MonoBehaviour
 
             return false;
         }
+    }
+
+    private static bool WieldingWeapon()
+    {
+        if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+            return false;
+
+        var holder = player!.FPItemHolder;
+        if (!Alive(holder))
+            return false;
+
+        var item = holder!.WieldedItem;
+        if (!Alive(item))
+            return false;
+
+        return Alive(item!.TryCast<BulletWeapon>())
+            || Alive(item.TryCast<MeleeWeaponFirstPerson>());
     }
 
     /// <summary>
