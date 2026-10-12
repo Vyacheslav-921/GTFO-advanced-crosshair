@@ -185,6 +185,25 @@ internal sealed class MagHintOverlay
         return Mathf.Clamp01((capacity - roundsLeft) / span);
     }
 
+    /// <summary>
+    /// Top of the EMPTY word. The bio-scan circle uses the same line when that word is hidden.
+    /// </summary>
+    internal static float AnchorTop(float contentFloor)
+    {
+        return Mathf.Min(contentFloor, -MinimumDrop) - BelowHintGap;
+    }
+
+    internal bool TryGetContentBottom(out float bottom)
+    {
+        bottom = 0f;
+        if (_hidden || !Alive(_label) || !_label!.gameObject.activeSelf)
+            return false;
+
+        var rect = _label.rectTransform;
+        bottom = rect.anchoredPosition.y - rect.sizeDelta.y * rect.pivot.y;
+        return true;
+    }
+
     public bool NeedsPresentation(bool aiming)
     {
         if (!Enabled.Value || !aiming || !EmptyShouldStay())
@@ -237,7 +256,7 @@ internal sealed class MagHintOverlay
         }
 
         ApplyShimmer(text, color, intensity);
-        var top = Mathf.Min(contentFloor, -MinimumDrop) - BelowHintGap;
+        var top = AnchorTop(contentFloor);
         if (float.IsNaN(_appliedTop) || !Mathf.Approximately(_appliedTop, top))
         {
             text.rectTransform.anchoredPosition = new Vector2(0f, top);
@@ -608,6 +627,26 @@ internal sealed class MagHintOverlay
             pipColor.a = Mathf.Lerp(spentOpacity, opacity, presence) * fade;
             CrosshairOverlay.SetSprite(pip, pipColor, pipSize);
         }
+    }
+
+    /// <summary>
+    /// Center X and bottom edge of the right-side magazine pip stack. When the pips are
+    /// currently hidden, returns the configured five-pip layout so adjacent indicators
+    /// remain in the same place.
+    /// </summary>
+    internal void GetCounterPlacement(float outlineSize, out float centerX, out float bottom)
+    {
+        var pipSize = _appliedMagPipSize > 0f
+            ? _appliedMagPipSize
+            : Mathf.Clamp(MagCounterSize.Value, 1f, 16f);
+        var pipCount = _appliedMagPipCount > 0 ? _appliedMagPipCount : MagPipCount;
+        centerX = !float.IsNaN(_appliedMagAnchorX)
+            ? _appliedMagAnchorX
+            : outlineSize * 0.5f + MagPipMargin + pipSize * 0.5f;
+
+        var gap = pipSize * MagPipGapRatio;
+        var span = pipCount * pipSize + (pipCount - 1) * gap;
+        bottom = -span * 0.5f;
     }
 
     internal void ClearPips()
