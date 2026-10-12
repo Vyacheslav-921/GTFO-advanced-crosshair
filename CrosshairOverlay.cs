@@ -35,6 +35,7 @@ internal enum ReticleShape
 /// Up to five small circles sit to the right of Outline. A magazine under five rounds
 /// shows one circle per round, drawn a little larger. Spent circles stay visible at a
 /// lower opacity and fill back in from the bottom over a reload.
+/// The stack is hidden on a full magazine and fades toward those opacities as rounds are spent.
 ///
 /// A melee charge draws a configurable shape, then shrinks it
 /// to the crosshair's outer edge as <see cref="MWS_ChargeUp.m_elapsed"/> reaches full damage.
@@ -125,12 +126,14 @@ internal class CrosshairOverlay : MonoBehaviour
     private float _appliedMagPipSize = float.NaN;
     private float _appliedMagOpacity = -1f;
     private float _appliedMagSpentOpacity = -1f;
+    private float _appliedMagFade = -1f;
+    private bool _magFadeHidden;
     private Color _appliedMagColor;
     private readonly PackHintOverlay _packHints = new();
     private readonly ItemHintOverlay _itemHints = new();
     private readonly ToolHintOverlay _toolHints = new();
     private readonly ScopeAmmoOverlay _scopeAmmo = new();
-    private readonly EmptyMagOverlay _emptyMag = new();
+    private readonly MagHintOverlay _magHint = new();
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -425,7 +428,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Opacity",
             0.8f,
             new ConfigDescription(
-                "Opacity of rounds still in the magazine. 0 is invisible, 1 is solid.",
+                "Opacity of rounds still in the magazine once the dots have faded in. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
 
         MagCounterSpentOpacity = config.Bind(
@@ -433,7 +436,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Spent opacity",
             0.18f,
             new ConfigDescription(
-                "Opacity of spent rounds. 0 is invisible, 1 is solid.",
+                "Opacity of spent rounds once the dots have faded in. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
     }
 
@@ -515,7 +518,8 @@ internal class CrosshairOverlay : MonoBehaviour
             _charging = false;
 
         SetCrosshairShapesActive(showCrosshair);
-        ApplyMagIndicator(showCrosshair);
+        var hasMagFill = TryGetMagDisplayed(out var magDisplayed, out var magCapacity);
+        ApplyMagIndicator(showCrosshair, hasMagFill, magDisplayed, magCapacity);
 
         if (showCrosshair)
             ApplyHint();
@@ -523,9 +527,9 @@ internal class CrosshairOverlay : MonoBehaviour
             EndHintCharge();
 
         var aiming = hasState && state is eGameStateName.InLevel or eGameStateName.Lobby;
-        var showEmptyMag = _emptyMag.NeedsPresentation(aiming)
-            && _emptyMag.Update(hintParent, hintLayer, HintFloor());
-        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo || showEmptyMag;
+        var showMagHint = _magHint.NeedsPresentation(aiming)
+            && _magHint.Update(hintParent, hintLayer, HintFloor());
+        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo || showMagHint;
 
         if (_root!.activeSelf != showRoot)
         {
@@ -1162,7 +1166,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _itemHints.Detach();
         _toolHints.Detach();
         _scopeAmmo.Detach();
-        _emptyMag.Detach();
+        _magHint.Detach();
     }
 
     private static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)
@@ -1491,14 +1495,17 @@ internal class CrosshairOverlay : MonoBehaviour
     /// Fired rounds leave their pip in place at the configured spent opacity.
     /// A reload fills the stack back toward the clip the gun already holds
     /// while the reload animation is still playing.
+    /// <see cref="MagHintOverlay.OpacityFactor"/> hides a full magazine and fades the
+    /// stack up to the configured opacities as rounds are spent.
     /// </summary>
-    private void ApplyMagIndicator(bool showCrosshair)
+    private void ApplyMagIndicator(bool showCrosshair, bool hasMag, float displayed, int capacity)
     {
         if (!showCrosshair
             || !MagCounterEnabled.Value
             || _magPipSprite == null
-            || !TryGetMagDisplayed(out var displayed, out var capacity))
+            || !hasMag)
         {
+            _magFadeHidden = false;
             HideMagPips();
             return;
         }
@@ -1506,10 +1513,27 @@ internal class CrosshairOverlay : MonoBehaviour
         var outlineRenderer = _outlineShape?.m_sprite;
         if (outlineRenderer == null)
         {
+            _magFadeHidden = false;
             HideMagPips();
             return;
         }
 
+        var fade = MagHintOverlay.OpacityFactor(
+            displayed * capacity,
+            capacity,
+            MagHintOverlay.FullOpacityAt.Value);
+        if (fade <= 0.0001f)
+        {
+            if (!_magFadeHidden)
+            {
+                HideMagPips();
+                _magFadeHidden = true;
+            }
+
+            return;
+        }
+
+        _magFadeHidden = false;
         var configuredSize = Mathf.Clamp(MagCounterSize.Value, 1f, 16f);
         var opacity = Mathf.Clamp01(MagCounterOpacity.Value);
         var spentOpacity = Mathf.Clamp01(MagCounterSpentOpacity.Value);
@@ -1526,7 +1550,8 @@ internal class CrosshairOverlay : MonoBehaviour
         var sizeChanged = float.IsNaN(_appliedMagPipSize) || !Mathf.Approximately(_appliedMagPipSize, pipSize);
         var opacityChanged = !Mathf.Approximately(_appliedMagOpacity, opacity)
             || !Mathf.Approximately(_appliedMagSpentOpacity, spentOpacity);
-        if (!layoutChanged && !colorChanged && !ratioChanged && !countChanged && !sizeChanged && !opacityChanged)
+        var fadeChanged = !Mathf.Approximately(_appliedMagFade, fade);
+        if (!layoutChanged && !colorChanged && !ratioChanged && !countChanged && !sizeChanged && !opacityChanged && !fadeChanged)
             return;
 
         _appliedMagAnchorX = anchorX;
@@ -1536,6 +1561,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedMagPipSize = pipSize;
         _appliedMagOpacity = opacity;
         _appliedMagSpentOpacity = spentOpacity;
+        _appliedMagFade = fade;
 
         var gap = pipSize * MagPipGapRatio;
         var span = pipCount * pipSize + (pipCount - 1) * gap;
@@ -1564,7 +1590,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
             var presence = Mathf.Clamp01(filled - (pipCount - 1 - i));
             var pipColor = color;
-            pipColor.a = Mathf.Lerp(spentOpacity, opacity, presence);
+            pipColor.a = Mathf.Lerp(spentOpacity, opacity, presence) * fade;
             SetSprite(pip, pipColor, pipSize);
         }
     }
@@ -1587,14 +1613,21 @@ internal class CrosshairOverlay : MonoBehaviour
             return false;
         }
 
-        var max = gun!.GetMaxClip();
+        // Wielding writes the clip a moment later. A 0 from that gap is not an empty magazine.
+        if (!gun!.m_hasGottenClip && gun.GetCurrentClip() <= 0 && gun.m_clip <= 0 && !gun.ClipIsFull())
+            return false;
+
+        var max = gun.GetMaxClip();
         if (max <= 0)
             max = gun.ClipSize;
         if (max <= 0)
             return false;
 
-        var clip = Mathf.Clamp(gun.GetCurrentClip(), 0, max);
-        var live = clip / (float)max;
+        var clipCount = gun.GetCurrentClip();
+        if (gun.m_clip > clipCount)
+            clipCount = gun.m_clip;
+        var clip = Mathf.Clamp(clipCount, 0, max);
+        var live = gun.ClipIsFull() ? 1f : clip / (float)max;
         var ptr = item!.Pointer;
         if (ptr != _magItemPtr)
         {
@@ -1636,6 +1669,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedMagPipSize = float.NaN;
         _appliedMagOpacity = -1f;
         _appliedMagSpentOpacity = -1f;
+        _appliedMagFade = -1f;
         for (var i = 0; i < MagPipCount; i++)
         {
             var pip = _magPips[i];
@@ -1660,6 +1694,8 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedMagPipSize = float.NaN;
         _appliedMagOpacity = -1f;
         _appliedMagSpentOpacity = -1f;
+        _appliedMagFade = -1f;
+        _magFadeHidden = false;
     }
 
     private void ApplyStyle()
@@ -1777,7 +1813,7 @@ internal class CrosshairOverlay : MonoBehaviour
             if (WieldedFrame.TryGetItem(out var item) && Alive(item) && item!.IsReloading)
                 return true;
 
-            return _emptyMag.MagazineIsEmpty() || ToolHintOverlay.WieldedToolAmmoIsEmpty();
+            return _magHint.MagazineIsEmpty() || ToolHintOverlay.WieldedToolAmmoIsEmpty();
         }
         catch (Exception ex)
         {

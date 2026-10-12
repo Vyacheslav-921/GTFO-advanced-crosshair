@@ -295,7 +295,8 @@ internal sealed class ItemHintOverlay
                 _color = ParseColor(hex, Color.white);
             }
 
-            var uses = RemainingUses(item);
+            // Long range flashlight capacity is always one.
+            var uses = _kind == ItemHintKind.Flash ? 1 : RemainingUses(item);
             if (uses != _uses)
             {
                 _uses = uses;

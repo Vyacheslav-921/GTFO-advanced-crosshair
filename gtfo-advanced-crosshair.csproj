@@ -32,5 +32,6 @@
     <Folder Include="Patches\" />
     <Compile Remove="tools/**" />
     <Compile Remove="obj/**" />
+    <Compile Remove="_ref/**" />
   </ItemGroup>
 </Project>

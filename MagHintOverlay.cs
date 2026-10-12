@@ -2,7 +2,6 @@ using System;
 using BepInEx.Configuration;
 using Gear;
 using Il2CppInterop.Runtime.InteropTypes;
-using Player;
 using TMPro;
 using UnityEngine;
 
@@ -11,14 +10,22 @@ namespace V921;
 /// <summary>
 /// "EMPTY" under the other visor hints while the wielded gun's magazine has no rounds.
 /// A reload that starts from an empty magazine keeps the word up until that reload finishes.
-/// The gleam is the same text color the other hints use, pulsed per letter when the mesh allows it.
+/// The magazine dots beside the crosshair fade on their own curve. This word does not follow that fade.
+/// The gleam is the text color, pulsed per letter when the mesh allows it.
 /// </summary>
-internal sealed class EmptyMagOverlay
+internal sealed class MagHintOverlay
 {
+    /// <summary>
+    /// Remaining rounds that always draw at the configured opacity.
+    /// A full magazine stays hidden even when it holds this many rounds or fewer.
+    /// </summary>
+    internal const float RoundsAtFullOpacity = 10f;
+
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
     public static ConfigEntry<int> Size { get; private set; } = null!;
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
     public static ConfigEntry<float> ShimmerIntensity { get; private set; } = null!;
+    public static ConfigEntry<float> FullOpacityAt { get; private set; } = null!;
 
     private const string Word = "EMPTY";
     private const float TmpPointsPerHudUnit = 10f;
@@ -26,6 +33,11 @@ internal sealed class EmptyMagOverlay
     private const float MinimumDrop = 24f;
     private const float ShimmerSpeed = 6f;
     private const float ShimmerCharacterLag = 0.7f;
+
+    /// <summary>
+    /// Wielding copies the magazine onto the gun a moment later. Until then a full gun still reads as 0.
+    /// </summary>
+    private const float ClipSettleSeconds = 0.25f;
 
     private TextMeshPro? _label;
     private string? _appliedColorHex;
@@ -36,6 +48,8 @@ internal sealed class EmptyMagOverlay
     private bool _emptyWasShown;
     private bool _holdForReload;
     private IntPtr _heldItem;
+    private IntPtr _clipZeroItem;
+    private float _clipZeroSince = -1f;
     private bool _wordReady;
     private bool _meshReady;
     private float _appliedTop = float.NaN;
@@ -44,20 +58,20 @@ internal sealed class EmptyMagOverlay
 
     public static void Bind(ConfigFile config)
     {
-        const string section = "9 - Empty Mag Hint";
+        const string section = "9 - Mag Hint";
 
         Enabled = config.Bind(
             section,
             "Enabled",
             true,
-            "Show EMPTY below the other hints when the wielded gun's magazine is empty.");
+            "Show EMPTY below the other hints while the wielded gun's magazine is empty. A reload that starts empty keeps it up until that reload finishes.");
 
         Size = config.Bind(
             section,
             "Size",
             18,
             new ConfigDescription(
-                "EMPTY text height in HUD units.",
+                "Mag hint text height in HUD units.",
                 new AcceptableValueRange<int>(2, 48)));
 
         ColorHex = config.Bind(
@@ -71,8 +85,40 @@ internal sealed class EmptyMagOverlay
             "Shimmer intensity",
             0.6f,
             new ConfigDescription(
-                "How strongly EMPTY gleams. 0 keeps a steady color, 1 is the strongest shimmer.",
+                "How strongly the mag hint gleams. 0 keeps a steady color, 1 is the strongest shimmer.",
                 new AcceptableValueRange<float>(0f, 1f)));
+
+        FullOpacityAt = config.Bind(
+            section,
+            "Full opacity at",
+            0.7f,
+            new ConfigDescription(
+                "Magazine fill where the magazine dots reach Mag counter Opacity. 0.7 reaches it at 70% of the magazine and keeps it there as fewer rounds remain. A full magazine always hides the dots. The last 10 rounds always use that opacity, so a short magazine does not stay faded. EMPTY stays hidden until the magazine is empty.",
+                new AcceptableValueRange<float>(0f, 1f)));
+    }
+
+    /// <summary>
+    /// 0 while the magazine is full. 1 once the remaining rounds are at or below the larger of
+    /// the configured fill and <see cref="RoundsAtFullOpacity"/>. Between those, it rises as rounds are spent.
+    /// </summary>
+    internal static float OpacityFactor(float roundsLeft, int capacity, float fullAtFraction)
+    {
+        if (capacity <= 0)
+            return 0f;
+
+        // Full stays hidden even when the magazine itself is 10 rounds or fewer.
+        if (roundsLeft >= capacity - 0.001f)
+            return 0f;
+
+        var gate = Mathf.Max(capacity * Mathf.Clamp01(fullAtFraction), RoundsAtFullOpacity);
+        if (roundsLeft <= gate)
+            return 1f;
+
+        var span = capacity - gate;
+        if (span <= 0.001f)
+            return 1f;
+
+        return Mathf.Clamp01((capacity - roundsLeft) / span);
     }
 
     public bool NeedsPresentation(bool aiming)
@@ -117,9 +163,13 @@ internal sealed class EmptyMagOverlay
             text.fontSize = size * TmpPointsPerHudUnit;
             text.rectTransform.sizeDelta = new Vector2(size * 8f, size * 2.5f);
             text.color = color;
-            text.ForceMeshUpdate();
-            _wordReady = true;
-            _meshReady = true;
+            // An inactive visor builds an empty mesh, and that mesh would stay empty after the root turns on.
+            if (text.gameObject.activeInHierarchy)
+            {
+                text.ForceMeshUpdate();
+                _wordReady = true;
+                _meshReady = true;
+            }
         }
 
         ApplyShimmer(text, color, intensity);
@@ -143,12 +193,15 @@ internal sealed class EmptyMagOverlay
         _emptyWasShown = false;
         _holdForReload = false;
         _heldItem = IntPtr.Zero;
+        _clipZeroItem = IntPtr.Zero;
+        _clipZeroSince = -1f;
         _hidden = true;
     }
 
     /// <summary>
     /// The clip count is written when a reload starts, before the animation finishes.
     /// EMPTY stays up for that reload when the magazine was empty as it began.
+    /// Switching weapons clears it. A clip that has not arrived yet is not an empty magazine.
     /// </summary>
     private bool EmptyShouldStay()
     {
@@ -214,6 +267,7 @@ internal sealed class EmptyMagOverlay
             }
 
             var time = Time.unscaledTime * ShimmerSpeed;
+            var painted = false;
             for (var i = 0; i < count; i++)
             {
                 var character = characters[i];
@@ -231,6 +285,13 @@ internal sealed class EmptyMagOverlay
                 colors[vertex + 1] = vertexColor;
                 colors[vertex + 2] = vertexColor;
                 colors[vertex + 3] = vertexColor;
+                painted = true;
+            }
+
+            if (!painted)
+            {
+                text.color = Gleam(color, intensity, 0.5f + 0.5f * Mathf.Sin(time));
+                return;
             }
 
             text.UpdateVertexData(TMP_VertexDataUpdateFlags.Colors32);
@@ -239,7 +300,7 @@ internal sealed class EmptyMagOverlay
         {
             _shimmerFailed = true;
             text.color = Gleam(color, intensity, 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * ShimmerSpeed));
-            LogOnce($"Empty mag shimmer fell back to a solid pulse: {ex.Message}");
+            LogOnce($"Mag hint shimmer fell back to a solid pulse: {ex.Message}");
         }
     }
 
@@ -260,7 +321,7 @@ internal sealed class EmptyMagOverlay
             if (!Alive(source) || source!.font == null)
                 return null;
 
-            go = new GameObject("Empty Mag Hint");
+            go = new GameObject("Mag Hint");
             go.layer = layer;
             var rect = go.AddComponent<RectTransform>();
             rect.SetParent(parent, false);
@@ -300,14 +361,16 @@ internal sealed class EmptyMagOverlay
             if (go != null)
                 UnityEngine.Object.Destroy(go);
 
-            LogOnce($"Empty mag hint create failed: {ex.Message}");
+            LogOnce($"Mag hint create failed: {ex.Message}");
             return null;
         }
     }
 
     /// <summary>
-    /// The inventory widget is the clip number on the player HUD. The weapon fields cover a gun
-    /// whose widget is not showing a magazine count.
+    /// The wielded gun's magazine has no rounds.
+    /// The higher of the clip reads is the count the magazine dots use, so one stale 0 is not empty.
+    /// Wielding copies that count a moment later, and until then a full gun still reads as 0.
+    /// A fetched 0 is empty. A 0 that is still there after the copy gap is empty too.
     /// </summary>
     internal bool MagazineIsEmpty()
     {
@@ -316,59 +379,56 @@ internal sealed class EmptyMagOverlay
             if (!WieldedFrame.TryGetBulletWeapon(out var gun) || !Alive(gun))
                 return false;
 
-            var clip = gun!.GetCurrentClip();
-            // Rounds still in the weapon, so the magazine the HUD shows is not empty either.
-            if (clip > 0 && gun.m_clip > 0)
+            if (gun!.ClipIsFull())
+            {
+                _clipZeroSince = -1f;
                 return false;
+            }
 
-            if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
+            var rounds = gun.GetCurrentClip();
+            if (gun.m_clip > rounds)
+                rounds = gun.m_clip;
+            if (rounds > 0)
+            {
+                _clipZeroSince = -1f;
                 return false;
+            }
 
-            if (DisplayedMagazineIsEmpty(item!))
-                return true;
-
-            var max = gun!.GetMaxClip();
+            var max = gun.GetMaxClip();
             if (max <= 0)
                 max = gun.ClipSize;
             if (max <= 0)
                 return false;
 
-            return clip <= 0 && gun.m_clip <= 0;
+            if (gun.m_hasGottenClip)
+                return true;
+
+            return UnfetchedZeroHasSettled();
         }
         catch (Exception ex)
         {
-            LogOnce($"Empty mag hint update failed: {ex.Message}");
+            LogOnce($"Mag hint update failed: {ex.Message}");
             return false;
         }
     }
 
-    private static bool DisplayedMagazineIsEmpty(ItemEquippable item)
+    private bool UnfetchedZeroHasSettled()
     {
-        var block = Alive(item.ItemDataBlock) ? item.ItemDataBlock : null;
-        if (block == null)
-            return false;
+        var ptr = IntPtr.Zero;
+        if (WieldedFrame.TryGetItem(out var item) && Alive(item))
+            ptr = item!.Pointer;
 
-        var slot = block!.inventorySlot;
-        if (slot is not (InventorySlot.GearStandard or InventorySlot.GearSpecial))
+        if (ptr != _clipZeroItem)
+        {
+            _clipZeroItem = ptr;
+            _clipZeroSince = Time.unscaledTime;
             return false;
+        }
 
-        var playerGui = GuiManager.PlayerLayer;
-        if (!Alive(playerGui))
-            return false;
+        if (_clipZeroSince < 0f)
+            _clipZeroSince = Time.unscaledTime;
 
-        var inventory = playerGui!.Inventory;
-        if (!Alive(inventory))
-            return false;
-
-        var slots = inventory!.m_inventorySlots;
-        if (!Alive(slots) || !slots!.ContainsKey(slot))
-            return false;
-
-        var widget = slots[slot];
-        if (!Alive(widget) || widget!.ShowAmmoInfinite || !widget.ShowAmmoClip)
-            return false;
-
-        return widget.m_ammoClipAbsVal <= 0;
+        return Time.unscaledTime - _clipZeroSince >= ClipSettleSeconds;
     }
 
     private void Hide()
