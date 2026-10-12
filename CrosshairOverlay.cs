@@ -40,6 +40,9 @@ internal enum ReticleShape
 /// - <see cref="GameStateManager.CurrentStateName"/> is <see cref="eGameStateName.InLevel"/>
 /// - <see cref="FocusStateManager.CurrentState"/> is <see cref="eFocusState.FPS"/>
 /// - the player is not aiming through a magnified scope
+///
+/// While running, jumping, falling, reloading, downed, or out of ammo, Center and Outline
+/// draw at half of their configured opacity. Center becomes white and Outline becomes pale green.
 /// </summary>
 internal class CrosshairOverlay : MonoBehaviour
 {
@@ -84,6 +87,9 @@ internal class CrosshairOverlay : MonoBehaviour
     private const float MinimumOutlineShapeSize = 12f;
     private const float HintReadyPadding = 2f;
     private const float HeldItemCenterClearance = 12f;
+    private const string BlockedCenterColorHex = "ffffff";
+    private const string BlockedOutlineColorHex = "5eb18e";
+    private const float BlockedOpacityScale = 0.5f;
 
     internal static CrosshairOverlay? Current { get; private set; }
 
@@ -143,6 +149,8 @@ internal class CrosshairOverlay : MonoBehaviour
     private float _autoAttackBlinkStartedAt = -1f;
     private float _appliedBlinkAmount = -1f;
     private bool _appliedCenterClearance;
+    private bool _appliedUsageBlocked;
+    private bool _usageBlockErrorLogged;
     private IntPtr _autoAttackBlinkChargePtr;
     private int _autoAttackBlinkTriggers;
     private bool _charging;
@@ -1065,6 +1073,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _autoAttackBlinkStartedAt = -1f;
         _appliedBlinkAmount = -1f;
         _appliedCenterClearance = false;
+        _appliedUsageBlocked = false;
         _autoAttackBlinkChargePtr = IntPtr.Zero;
         _autoAttackBlinkTriggers = 0;
         _hintLayoutDiameter = 0f;
@@ -1145,6 +1154,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedOutlineShape = null;
         _appliedBlinkAmount = -1f;
         _appliedCenterClearance = false;
+        _appliedUsageBlocked = false;
     }
 
     /// <summary>
@@ -1422,6 +1432,7 @@ internal class CrosshairOverlay : MonoBehaviour
         var outlineShape = ParseShape(OutlineShape.Value);
         var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
         var centerClearance = HoldingPackOrItem();
+        var usageBlocked = UsageIsBlocked();
         var blinkAmount = AutoAttackBlinkAmount();
         var thicknessIncrease = Mathf.Clamp(AutoAttackBlinkThicknessIncrease.Value, 0f, 200f) * 0.01f;
         centerThickness = NormalizedShapeThickness(centerThickness * (1f + thicknessIncrease * blinkAmount));
@@ -1438,7 +1449,8 @@ internal class CrosshairOverlay : MonoBehaviour
             && Mathf.Approximately(outlineSpacing, _appliedOutlineSpacing)
             && outlineShape == _appliedOutlineShape
             && Mathf.Approximately(blinkAmount, _appliedBlinkAmount)
-            && centerClearance == _appliedCenterClearance)
+            && centerClearance == _appliedCenterClearance
+            && usageBlocked == _appliedUsageBlocked)
             return;
 
         _appliedCenterColorHex = hex;
@@ -1452,6 +1464,15 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedOutlineShape = outlineShape;
         _appliedBlinkAmount = blinkAmount;
         _appliedCenterClearance = centerClearance;
+        _appliedUsageBlocked = usageBlocked;
+
+        if (usageBlocked)
+        {
+            hex = BlockedCenterColorHex;
+            outlineHex = BlockedOutlineColorHex;
+            opacity *= BlockedOpacityScale;
+            outlineOpacity *= BlockedOpacityScale;
+        }
 
         var color = ParseColor(hex);
         color.a *= opacity;
@@ -1480,6 +1501,46 @@ internal class CrosshairOverlay : MonoBehaviour
         if (centerClearance)
             size += HeldItemCenterClearance;
         return size;
+    }
+
+    /// <summary>
+    /// The wielded item cannot be used: running, jumping or falling, reloading, downed, or no ammo.
+    /// </summary>
+    private bool UsageIsBlocked()
+    {
+        try
+        {
+            if (WieldedFrame.TryGetPlayer(out var player) && Alive(player))
+            {
+                var locomotion = player!.Locomotion;
+                if (Alive(locomotion))
+                {
+                    var state = locomotion!.m_currentStateEnum;
+                    if (locomotion.IsRunning
+                        || locomotion.m_isJumping
+                        || state is PlayerLocomotion.PLOC_State.Run
+                            or PlayerLocomotion.PLOC_State.Jump
+                            or PlayerLocomotion.PLOC_State.Fall
+                            or PlayerLocomotion.PLOC_State.Downed)
+                        return true;
+                }
+            }
+
+            if (WieldedFrame.TryGetItem(out var item) && Alive(item) && item!.IsReloading)
+                return true;
+
+            return _emptyMag.MagazineIsEmpty() || ToolHintOverlay.WieldedToolAmmoIsEmpty();
+        }
+        catch (Exception ex)
+        {
+            if (!_usageBlockErrorLogged)
+            {
+                _usageBlockErrorLogged = true;
+                Plugin.Instance.Log.LogWarning($"Crosshair usage state check failed: {ex.Message}");
+            }
+
+            return false;
+        }
     }
 
     private static bool HoldingPackOrItem()

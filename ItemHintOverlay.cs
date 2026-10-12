@@ -443,11 +443,13 @@ internal sealed class ItemHintOverlay
     /// <summary>
     /// Glow sticks and fog repellers report <see cref="AmmoType.CurrentConsumable"/>.
     /// The lock melter does not, so it uses that same consumable pool.
+    /// A consumable mine deployer still reports <see cref="AmmoType.Class"/>, the shared
+    /// tool pool. Its own count is on the consumable slot, for explosive and foam mines.
     /// </summary>
     private static int RemainingUses(ItemEquippable item)
     {
         var ammoType = item.AmmoType;
-        if (ammoType == AmmoType.None)
+        if (ammoType == AmmoType.None || Alive(item.TryCast<MineDeployerFirstPerson>()))
             ammoType = AmmoType.CurrentConsumable;
 
         var backpack = PlayerBackpackManager.LocalBackpack;

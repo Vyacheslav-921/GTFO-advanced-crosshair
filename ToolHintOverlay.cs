@@ -363,6 +363,21 @@ internal sealed class ToolHintOverlay
         return true;
     }
 
+    /// <summary>
+    /// Turret, foam launcher, and mine deployer with an empty class-tool pool.
+    /// The bio tracker is infinite, so it is never empty.
+    /// </summary>
+    internal static bool WieldedToolAmmoIsEmpty()
+    {
+        if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
+            return false;
+
+        if (!TryClassify(item!, out _))
+            return false;
+
+        return TryGetPercent(item!, out var percent) && percent <= 0;
+    }
+
     private static string Identity(ItemEquippable item)
     {
         var text = new StringBuilder();

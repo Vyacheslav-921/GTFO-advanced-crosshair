@@ -265,7 +265,7 @@ internal sealed class EmptyMagOverlay
     /// The inventory widget is the clip number on the player HUD. The weapon fields cover a gun
     /// whose widget is not showing a magazine count.
     /// </summary>
-    private bool MagazineIsEmpty()
+    internal bool MagazineIsEmpty()
     {
         try
         {
