@@ -10,6 +10,7 @@ namespace V921;
 
 /// <summary>
 /// "EMPTY" under the other visor hints while the wielded gun's magazine has no rounds.
+/// A reload that starts from an empty magazine keeps the word up until that reload finishes.
 /// The gleam is the same text color the other hints use, pulsed per letter when the mesh allows it.
 /// </summary>
 internal sealed class EmptyMagOverlay
@@ -32,6 +33,9 @@ internal sealed class EmptyMagOverlay
     private bool _shimmerFailed;
     private bool _errorLogged;
     private bool _hidden = true;
+    private bool _emptyWasShown;
+    private bool _holdForReload;
+    private IntPtr _heldItem;
     private bool _wordReady;
     private bool _meshReady;
     private float _appliedTop = float.NaN;
@@ -73,7 +77,7 @@ internal sealed class EmptyMagOverlay
 
     public bool NeedsPresentation(bool aiming)
     {
-        if (!Enabled.Value || !aiming || !MagazineIsEmpty())
+        if (!Enabled.Value || !aiming || !EmptyShouldStay())
         {
             Hide();
             return false;
@@ -136,7 +140,47 @@ internal sealed class EmptyMagOverlay
     {
         DestroyText(ref _label);
         ResetAppliedStyle();
+        _emptyWasShown = false;
+        _holdForReload = false;
+        _heldItem = IntPtr.Zero;
         _hidden = true;
+    }
+
+    /// <summary>
+    /// The clip count is written when a reload starts, before the animation finishes.
+    /// EMPTY stays up for that reload when the magazine was empty as it began.
+    /// </summary>
+    private bool EmptyShouldStay()
+    {
+        if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
+        {
+            _emptyWasShown = false;
+            _holdForReload = false;
+            _heldItem = IntPtr.Zero;
+            return false;
+        }
+
+        var ptr = item!.Pointer;
+        if (ptr != _heldItem)
+        {
+            _heldItem = ptr;
+            _emptyWasShown = false;
+            _holdForReload = false;
+        }
+
+        var empty = MagazineIsEmpty();
+        var reloading = item.IsReloading;
+        if (empty)
+            _emptyWasShown = true;
+        if (_emptyWasShown && reloading)
+            _holdForReload = true;
+
+        if (empty || (_holdForReload && reloading))
+            return true;
+
+        _emptyWasShown = false;
+        _holdForReload = false;
+        return false;
     }
 
     /// <summary>

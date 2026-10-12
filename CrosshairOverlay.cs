@@ -32,6 +32,9 @@ internal enum ReticleShape
 /// the sway rest position. Shotguns stay centered: their pellets follow the camera.
 ///
 /// The crosshair has three parts from the center outward: Center, Outline, and Hint.
+/// Up to five small circles sit to the right of Outline. A magazine under five rounds
+/// shows one circle per round, drawn a little larger. Spent circles stay visible at a
+/// lower opacity and fill back in from the bottom over a reload.
 ///
 /// A melee charge draws a configurable shape, then shrinks it
 /// to the crosshair's outer edge as <see cref="MWS_ChargeUp.m_elapsed"/> reaches full damage.
@@ -75,6 +78,10 @@ internal class CrosshairOverlay : MonoBehaviour
     public static ConfigEntry<int> MeleeHintSize { get; private set; } = null!;
     public static ConfigEntry<float> MeleeHintThickness { get; private set; } = null!;
     public static ConfigEntry<float> MeleeHintOpacity { get; private set; } = null!;
+    public static ConfigEntry<bool> MagCounterEnabled { get; private set; } = null!;
+    public static ConfigEntry<float> MagCounterSize { get; private set; } = null!;
+    public static ConfigEntry<float> MagCounterOpacity { get; private set; } = null!;
+    public static ConfigEntry<float> MagCounterSpentOpacity { get; private set; } = null!;
 
     /// <summary>
     /// The crosshair layer's vertical mapping does not match view space.
@@ -87,6 +94,11 @@ internal class CrosshairOverlay : MonoBehaviour
     private const float MinimumOutlineShapeSize = 12f;
     private const float HintReadyPadding = 2f;
     private const float HeldItemCenterClearance = 12f;
+    private const int MagPipCount = 5;
+    private const float MagPipGapRatio = 1.2f / 3.2f;
+    private const float MagPipMargin = 4f;
+    private const float MagPipSmallMagScaleStep = 0.12f;
+    private const float MagPipThickness = 16f;
     private const string BlockedCenterColorHex = "ffffff";
     private const string BlockedOutlineColorHex = "5eb18e";
     private const float BlockedOpacityScale = 0.5f;
@@ -100,6 +112,20 @@ internal class CrosshairOverlay : MonoBehaviour
     private UI_Sprite? _centerShape;
     private UI_Sprite? _outlineShape;
     private UI_Sprite? _hintShape;
+    private readonly UI_Sprite?[] _magPips = new UI_Sprite?[MagPipCount];
+    private Sprite? _magPipSprite;
+    private float _visibleOutlineSize;
+    private float _magDisplayed = -1f;
+    private bool _magReloadActive;
+    private float _magReloadDuration;
+    private IntPtr _magItemPtr;
+    private float _appliedMagDisplayed = -1f;
+    private float _appliedMagAnchorX = float.NaN;
+    private int _appliedMagPipCount = -1;
+    private float _appliedMagPipSize = float.NaN;
+    private float _appliedMagOpacity = -1f;
+    private float _appliedMagSpentOpacity = -1f;
+    private Color _appliedMagColor;
     private readonly PackHintOverlay _packHints = new();
     private readonly ItemHintOverlay _itemHints = new();
     private readonly ToolHintOverlay _toolHints = new();
@@ -379,6 +405,36 @@ internal class CrosshairOverlay : MonoBehaviour
             new ConfigDescription(
                 "Hint opacity. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
+
+        MagCounterEnabled = config.Bind(
+            "5 - Mag counter",
+            "Enabled",
+            true,
+            "Show the magazine dots beside the crosshair.");
+
+        MagCounterSize = config.Bind(
+            "5 - Mag counter",
+            "Size",
+            3.2f,
+            new ConfigDescription(
+                "Magazine dot diameter in HUD units. Clips shorter than five rounds scale each dot up slightly.",
+                new AcceptableValueRange<float>(1f, 16f)));
+
+        MagCounterOpacity = config.Bind(
+            "5 - Mag counter",
+            "Opacity",
+            0.8f,
+            new ConfigDescription(
+                "Opacity of rounds still in the magazine. 0 is invisible, 1 is solid.",
+                new AcceptableValueRange<float>(0f, 1f)));
+
+        MagCounterSpentOpacity = config.Bind(
+            "5 - Mag counter",
+            "Spent opacity",
+            0.18f,
+            new ConfigDescription(
+                "Opacity of spent rounds. 0 is invisible, 1 is solid.",
+                new AcceptableValueRange<float>(0f, 1f)));
     }
 
     private void Update()
@@ -459,6 +515,7 @@ internal class CrosshairOverlay : MonoBehaviour
             _charging = false;
 
         SetCrosshairShapesActive(showCrosshair);
+        ApplyMagIndicator(showCrosshair);
 
         if (showCrosshair)
             ApplyHint();
@@ -947,6 +1004,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 out _outlineCircleSprite,
                 out _outlineLinesSprite);
             ApplyHintThickness(hintThickness);
+            LoadShapeSet(MagPipThickness, out _, out _, out _magPipSprite, out _);
             var sprite = _centerCircleSprite!;
             var hintSprite = SelectedHintSprite() ?? _hintCircleSprite!;
 
@@ -965,6 +1023,16 @@ internal class CrosshairOverlay : MonoBehaviour
             _centerShape = CreateSprite(rect, sprite, "Center Shape", layer, reference);
             _outlineShape = CreateSprite(rect, sprite, "Outline Shape", layer, reference);
             _hintShape = CreateSprite(rect, hintSprite, "Hint Shape", layer, reference);
+            if (_magPipSprite != null)
+            {
+                for (var i = 0; i < MagPipCount; i++)
+                {
+                    var pip = CreateSprite(rect, _magPipSprite, "Mag Pip " + (i + 1), layer, reference);
+                    pip.gameObject.SetActive(false);
+                    _magPips[i] = pip;
+                }
+            }
+
             _appliedHintSprite = hintSprite;
             if (reference != null
                 && _centerShape.m_sprite != null
@@ -1003,6 +1071,7 @@ internal class CrosshairOverlay : MonoBehaviour
             _outlineShape = null;
             _centerShape = null;
             _hintShape = null;
+            ClearMagPips();
             _centerDotsSprite = null;
             _centerArcsSprite = null;
             _centerLinesSprite = null;
@@ -1040,6 +1109,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _outlineShape = null;
         _centerShape = null;
         _hintShape = null;
+        ClearMagPips();
         _centerDotsSprite = null;
         _centerArcsSprite = null;
         _centerLinesSprite = null;
@@ -1415,6 +1485,183 @@ internal class CrosshairOverlay : MonoBehaviour
         return (byte)value;
     }
 
+    /// <summary>
+    /// Magazine pips sit just to the right of Outline, top circle first.
+    /// A clip shorter than <see cref="MagPipCount"/> draws one pip per round.
+    /// Fired rounds leave their pip in place at the configured spent opacity.
+    /// A reload fills the stack back toward the clip the gun already holds
+    /// while the reload animation is still playing.
+    /// </summary>
+    private void ApplyMagIndicator(bool showCrosshair)
+    {
+        if (!showCrosshair
+            || !MagCounterEnabled.Value
+            || _magPipSprite == null
+            || !TryGetMagDisplayed(out var displayed, out var capacity))
+        {
+            HideMagPips();
+            return;
+        }
+
+        var outlineRenderer = _outlineShape?.m_sprite;
+        if (outlineRenderer == null)
+        {
+            HideMagPips();
+            return;
+        }
+
+        var configuredSize = Mathf.Clamp(MagCounterSize.Value, 1f, 16f);
+        var opacity = Mathf.Clamp01(MagCounterOpacity.Value);
+        var spentOpacity = Mathf.Clamp01(MagCounterSpentOpacity.Value);
+        var pipCount = capacity < MagPipCount ? capacity : MagPipCount;
+        var pipSize = configuredSize * (pipCount < MagPipCount
+            ? 1f + (MagPipCount - pipCount) * MagPipSmallMagScaleStep
+            : 1f);
+        var color = outlineRenderer.color;
+        var anchorX = _visibleOutlineSize * 0.5f + MagPipMargin + pipSize * 0.5f;
+        var layoutChanged = float.IsNaN(_appliedMagAnchorX) || !Mathf.Approximately(_appliedMagAnchorX, anchorX);
+        var colorChanged = color != _appliedMagColor;
+        var ratioChanged = !Mathf.Approximately(_appliedMagDisplayed, displayed);
+        var countChanged = pipCount != _appliedMagPipCount;
+        var sizeChanged = float.IsNaN(_appliedMagPipSize) || !Mathf.Approximately(_appliedMagPipSize, pipSize);
+        var opacityChanged = !Mathf.Approximately(_appliedMagOpacity, opacity)
+            || !Mathf.Approximately(_appliedMagSpentOpacity, spentOpacity);
+        if (!layoutChanged && !colorChanged && !ratioChanged && !countChanged && !sizeChanged && !opacityChanged)
+            return;
+
+        _appliedMagAnchorX = anchorX;
+        _appliedMagColor = color;
+        _appliedMagDisplayed = displayed;
+        _appliedMagPipCount = pipCount;
+        _appliedMagPipSize = pipSize;
+        _appliedMagOpacity = opacity;
+        _appliedMagSpentOpacity = spentOpacity;
+
+        var gap = pipSize * MagPipGapRatio;
+        var span = pipCount * pipSize + (pipCount - 1) * gap;
+        var top = span * 0.5f - pipSize * 0.5f;
+        var step = pipSize + gap;
+        var filled = displayed * pipCount;
+        for (var i = 0; i < MagPipCount; i++)
+        {
+            var pip = _magPips[i];
+            if (!Alive(pip))
+                continue;
+
+            if (i >= pipCount)
+            {
+                if (pip!.gameObject.activeSelf)
+                    pip.gameObject.SetActive(false);
+                continue;
+            }
+
+            if (!pip!.gameObject.activeSelf)
+                pip.gameObject.SetActive(true);
+
+            var rect = pip.m_rect;
+            if (rect != null)
+                rect.anchoredPosition = new Vector2(anchorX, top - i * step);
+
+            var presence = Mathf.Clamp01(filled - (pipCount - 1 - i));
+            var pipColor = color;
+            pipColor.a = Mathf.Lerp(spentOpacity, opacity, presence);
+            SetSprite(pip, pipColor, pipSize);
+        }
+    }
+
+    private bool TryGetMagDisplayed(out float displayed, out int capacity)
+    {
+        displayed = 0f;
+        capacity = 0;
+        if (!WieldedFrame.TryGetBulletWeapon(out var gun) || !Alive(gun))
+        {
+            _magReloadActive = false;
+            _magItemPtr = IntPtr.Zero;
+            return false;
+        }
+
+        if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
+        {
+            _magReloadActive = false;
+            _magItemPtr = IntPtr.Zero;
+            return false;
+        }
+
+        var max = gun!.GetMaxClip();
+        if (max <= 0)
+            max = gun.ClipSize;
+        if (max <= 0)
+            return false;
+
+        var clip = Mathf.Clamp(gun.GetCurrentClip(), 0, max);
+        var live = clip / (float)max;
+        var ptr = item!.Pointer;
+        if (ptr != _magItemPtr)
+        {
+            _magItemPtr = ptr;
+            _magReloadActive = false;
+            _magDisplayed = live;
+        }
+
+        if (item.IsReloading)
+        {
+            if (!_magReloadActive)
+            {
+                _magReloadActive = true;
+                var duration = item.ReloadTime;
+                _magReloadDuration = duration > 0.05f ? duration : 1.2f;
+                if (_magDisplayed < 0f)
+                    _magDisplayed = 0f;
+            }
+
+            var step = Time.deltaTime / Mathf.Max(_magReloadDuration, 0.05f);
+            _magDisplayed = Mathf.MoveTowards(_magDisplayed, live, step);
+        }
+        else
+        {
+            _magReloadActive = false;
+            _magDisplayed = live;
+        }
+
+        displayed = Mathf.Clamp01(_magDisplayed);
+        capacity = max;
+        return true;
+    }
+
+    private void HideMagPips()
+    {
+        _appliedMagDisplayed = -1f;
+        _appliedMagAnchorX = float.NaN;
+        _appliedMagPipCount = -1;
+        _appliedMagPipSize = float.NaN;
+        _appliedMagOpacity = -1f;
+        _appliedMagSpentOpacity = -1f;
+        for (var i = 0; i < MagPipCount; i++)
+        {
+            var pip = _magPips[i];
+            if (Alive(pip) && pip!.gameObject.activeSelf)
+                pip.gameObject.SetActive(false);
+        }
+    }
+
+    private void ClearMagPips()
+    {
+        for (var i = 0; i < MagPipCount; i++)
+            _magPips[i] = null;
+
+        _magPipSprite = null;
+        _visibleOutlineSize = 0f;
+        _magDisplayed = -1f;
+        _magReloadActive = false;
+        _magItemPtr = IntPtr.Zero;
+        _appliedMagDisplayed = -1f;
+        _appliedMagAnchorX = float.NaN;
+        _appliedMagPipCount = -1;
+        _appliedMagPipSize = float.NaN;
+        _appliedMagOpacity = -1f;
+        _appliedMagSpentOpacity = -1f;
+    }
+
     private void ApplyStyle()
     {
         if (_centerShape == null || _outlineShape == null)
@@ -1489,6 +1736,7 @@ internal class CrosshairOverlay : MonoBehaviour
             outlineSize,
             visibleCenterSize,
             outlineSpacing);
+        _visibleOutlineSize = visibleOutlineSize;
         SetRendererSprite(_outlineShape, SelectedOutlineSprite(outlineShape));
         SetRendererSprite(_centerShape, SelectedCenterSprite(shape));
         SetSprite(_outlineShape, outline, visibleOutlineSize);
@@ -1851,7 +2099,7 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         return value switch
         {
-            "Two dots" => ReticleShape.Dots,
+            "Dots" or "Two dots" => ReticleShape.Dots,
             "Arcs" => ReticleShape.Arcs,
             "Circle" => ReticleShape.Circle,
             "Lines" => ReticleShape.Lines,
