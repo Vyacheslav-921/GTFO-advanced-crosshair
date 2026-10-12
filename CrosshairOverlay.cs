@@ -12,7 +12,7 @@ namespace V921;
 
 internal enum ReticleShape
 {
-    TwoDots,
+    Dots,
     Arcs,
     Circle,
     Lines
@@ -63,15 +63,15 @@ internal class CrosshairOverlay : MonoBehaviour
     public static ConfigEntry<float> OutlineThickness { get; private set; } = null!;
     public static ConfigEntry<float> OutlineOpacity { get; private set; } = null!;
     public static ConfigEntry<float> OutlineSpacing { get; private set; } = null!;
-    public static ConfigEntry<bool> HintEnabled { get; private set; } = null!;
-    public static ConfigEntry<bool> HintShowAlways { get; private set; } = null!;
-    public static ConfigEntry<string> HintShape { get; private set; } = null!;
-    public static ConfigEntry<string> HintColorHex { get; private set; } = null!;
-    public static ConfigEntry<string> HintAutoAttackColorHex { get; private set; } = null!;
-    public static ConfigEntry<float> HintAutoAttackThicknessIncrease { get; private set; } = null!;
-    public static ConfigEntry<int> HintSize { get; private set; } = null!;
-    public static ConfigEntry<float> HintThickness { get; private set; } = null!;
-    public static ConfigEntry<float> HintOpacity { get; private set; } = null!;
+    public static ConfigEntry<bool> MeleeHintEnabled { get; private set; } = null!;
+    public static ConfigEntry<bool> MeleeHintShowAlways { get; private set; } = null!;
+    public static ConfigEntry<string> MeleeHintShape { get; private set; } = null!;
+    public static ConfigEntry<string> MeleeHintColorHex { get; private set; } = null!;
+    public static ConfigEntry<string> MeleeHintAutoAttackColorHex { get; private set; } = null!;
+    public static ConfigEntry<float> MeleeHintAutoAttackThicknessIncrease { get; private set; } = null!;
+    public static ConfigEntry<int> MeleeHintSize { get; private set; } = null!;
+    public static ConfigEntry<float> MeleeHintThickness { get; private set; } = null!;
+    public static ConfigEntry<float> MeleeHintOpacity { get; private set; } = null!;
 
     /// <summary>
     /// The crosshair layer's vertical mapping does not match view space.
@@ -111,7 +111,10 @@ internal class CrosshairOverlay : MonoBehaviour
     private Sprite? _hintArcsSprite;
     private Sprite? _hintLinesSprite;
     private Sprite? _hintCircleSprite;
-    private readonly Dictionary<int, Sprite?[]> _hintShapeCache = new();
+    private readonly Dictionary<int, Sprite?[]> _shapeCache = new();
+    private readonly List<float> _prewarmThicknesses = new();
+    private int _prewarmIndex;
+    private static Color32[]? _pixels;
     private float _nextCreateAttempt;
     private string? _appliedCenterColorHex;
     private int _appliedCenterSize = -1;
@@ -142,6 +145,22 @@ internal class CrosshairOverlay : MonoBehaviour
     private bool _appliedCenterClearance;
     private IntPtr _autoAttackBlinkChargePtr;
     private int _autoAttackBlinkTriggers;
+    private bool _charging;
+    private float _chargeProgress;
+    private float _chargeWarning;
+    private IntPtr _frameChargePtr;
+    private int _recoilIntegratedFrame = -1;
+    private Vector2 _appliedAnchored;
+    private bool _hasAppliedAnchored;
+    private bool _hintVisible = true;
+    private int _steadyHintKey = int.MinValue;
+    private string? _steadyHintHex;
+    private float _steadyHintOpacity = -1f;
+    private FPS_RecoilSystem? _recoil;
+    private IntPtr _recoilPlayer;
+    private Vector2 _lastRecoilView;
+    private Vector2 _lastRecoilDelta;
+    private bool _hasRecoilView;
 
     public CrosshairOverlay(IntPtr ptr) : base(ptr)
     {
@@ -151,9 +170,9 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         Enabled = config.Bind(
             "1 - General",
-            "Enabled",
+            "Crosshair enabled",
             true,
-            "Draw the crosshair while aiming in a level.");
+            "Crosshair enabled.");
 
         ShowWeapons = config.Bind(
             "Show for:",
@@ -165,7 +184,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Show for:",
             "Tools",
             false,
-            "Show the crosshair while holding a class tool or the hacking tool.");
+            "Show the crosshair while holding any tool.");
 
         ShowPacks = config.Bind(
             "Show for:",
@@ -183,13 +202,13 @@ internal class CrosshairOverlay : MonoBehaviour
             "2 - Center",
             "Hide when scoped",
             true,
-            "Hide the crosshair while aiming through a magnified scope.");
+            "Hide the crosshair while aiming through a weapon scope.");
 
         FollowRecoil = config.Bind(
             "2 - Center",
             "Follow recoil",
             true,
-            "Move the crosshair center with weapon recoil that does not follow the camera. Shotguns stay centered.");
+            "Move the crosshair center with weapon recoil that does not follow the camera.");
 
         CenterShape = config.Bind(
             "2 - Center",
@@ -197,7 +216,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Arcs",
             new ConfigDescription(
                 "Center shape.",
-                new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
+                new AcceptableValueList<string>("Dots", "Arcs", "Circle", "Lines")));
 
         CenterColorHex = config.Bind(
             "2 - Center",
@@ -218,7 +237,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Thickness",
             2.8f,
             new ConfigDescription(
-                "Center shape thickness. For Two dots, this controls dot size.",
+                "Center shape thickness. For Dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         CenterOpacity = config.Bind(
@@ -233,12 +252,12 @@ internal class CrosshairOverlay : MonoBehaviour
             "2 - Center",
             "Auto attack blink color",
             "ff2a2a",
-            "Color Outline blinks to just before an automatic melee attack, as RRGGBB or RRGGBBAA.");
+            "Color Outline blinks just before an automatic melee attack, as RRGGBB or RRGGBBAA.");
 
         AutoAttackBlinkThicknessIncrease = config.Bind(
             "2 - Center",
             "Auto attack blink thickness increase",
-            90f,
+            50f,
             new ConfigDescription(
                 "Percentage by which Center and Outline thickness grows during the auto-attack blink.",
                 new AcceptableValueRange<float>(0f, 200f)));
@@ -249,7 +268,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Arcs",
             new ConfigDescription(
                 "Outline shape.",
-                new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
+                new AcceptableValueList<string>("Dots", "Arcs", "Circle", "Lines")));
 
         OutlineColorHex = config.Bind(
             "3 - Outline",
@@ -270,7 +289,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Thickness",
             3.4f,
             new ConfigDescription(
-                "Outline shape thickness. For Two dots, this controls dot size.",
+                "Outline shape thickness. For Dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         OutlineOpacity = config.Bind(
@@ -289,39 +308,39 @@ internal class CrosshairOverlay : MonoBehaviour
                 "Radial distance from the center shape.",
                 new AcceptableValueRange<float>(0f, 32f)));
 
-        HintEnabled = config.Bind(
+        MeleeHintEnabled = config.Bind(
             "4 - Hint",
             "Enabled",
             true,
             "Show the shrinking melee charge hint.");
 
-        HintShowAlways = config.Bind(
+        MeleeHintShowAlways = config.Bind(
             "4 - Hint",
             "Show always",
             false,
             "Keep the hint visible while no melee attack is charging.");
 
-        HintShape = config.Bind(
+        MeleeHintShape = config.Bind(
             "4 - Hint",
             "Shape",
             "Arcs",
             new ConfigDescription(
                 "Melee charge hint shape.",
-                new AcceptableValueList<string>("Two dots", "Arcs", "Circle", "Lines")));
+                new AcceptableValueList<string>("Dots", "Arcs", "Circle", "Lines")));
 
-        HintColorHex = config.Bind(
+        MeleeHintColorHex = config.Bind(
             "4 - Hint",
             "Color",
             "ffffff",
             "Melee charge hint color as RRGGBB or RRGGBBAA. Example: FF3355.");
 
-        HintAutoAttackColorHex = config.Bind(
+        MeleeHintAutoAttackColorHex = config.Bind(
             "4 - Hint",
             "Auto attack color",
             "cb2769",
             "Hint color as an automatic melee attack approaches, as RRGGBB or RRGGBBAA.");
 
-        HintAutoAttackThicknessIncrease = config.Bind(
+        MeleeHintAutoAttackThicknessIncrease = config.Bind(
             "4 - Hint",
             "Auto attack thickness increase",
             110f,
@@ -329,7 +348,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 "Percentage by which hint thickness grows as an automatic melee attack approaches.",
                 new AcceptableValueRange<float>(0f, 200f)));
 
-        HintSize = config.Bind(
+        MeleeHintSize = config.Bind(
             "4 - Hint",
             "Size",
             78,
@@ -337,15 +356,15 @@ internal class CrosshairOverlay : MonoBehaviour
                 "Starting diameter of the melee charge hint, in HUD units.",
                 new AcceptableValueRange<int>(8, 64)));
 
-        HintThickness = config.Bind(
+        MeleeHintThickness = config.Bind(
             "4 - Hint",
             "Thickness",
             1.25f,
             new ConfigDescription(
-                "Hint shape thickness. For Two dots, this controls dot size.",
+                "Hint shape thickness. For Dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
-        HintOpacity = config.Bind(
+        MeleeHintOpacity = config.Bind(
             "4 - Hint",
             "Opacity",
             0.8f,
@@ -356,6 +375,14 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private void Update()
     {
+        AdvancePrewarm();
+
+        if (!InFpsFocus())
+        {
+            HideRoot();
+            return;
+        }
+
         Transform? parent;
         try
         {
@@ -386,22 +413,42 @@ internal class CrosshairOverlay : MonoBehaviour
                 return;
         }
 
-        var showCrosshair = ShouldShow();
-        var hintParent = _rect;
-        var hintLayer = _rect != null ? _rect.gameObject.layer : 0;
-        var inLevel = InLevelFps();
+        var hasState = TryGetGameState(out var state);
+        var inLevel = hasState && state == eGameStateName.InLevel;
         var scoped = inLevel && AimingThroughScope();
         var inHudContext = inLevel && (!HideWhenScoped.Value || !scoped);
+        var showCrosshair = false;
+        if (inHudContext && Enabled.Value)
+        {
+            try
+            {
+                showCrosshair = WieldedCategoryIsShown();
+            }
+            catch (Exception ex)
+            {
+                if (!_stateErrorLogged)
+                {
+                    _stateErrorLogged = true;
+                    Plugin.Instance.Log.LogWarning($"Crosshair visibility check failed: {ex.Message}");
+                }
+            }
+        }
+
+        var hintParent = _rect;
+        var hintLayer = _rect != null ? _rect.gameObject.layer : 0;
         var showPackHint = _packHints.Update(hintParent, hintLayer, inHudContext);
         var showItemHint = _itemHints.Update(hintParent, hintLayer, inHudContext);
         var showToolHint = _toolHints.Update(hintParent, hintLayer, inHudContext);
         var showScopeAmmo = _scopeAmmo.Update(hintParent, hintLayer, scoped);
         if (showCrosshair)
         {
+            _charging = ReadMeleeCharge(out _chargeProgress, out _chargeWarning, out _frameChargePtr);
             if (!_crosshairShapesActive)
                 InvalidateAppliedStyle();
             ApplyStyle();
         }
+        else
+            _charging = false;
 
         SetCrosshairShapesActive(showCrosshair);
 
@@ -410,7 +457,9 @@ internal class CrosshairOverlay : MonoBehaviour
         else if (_hintChargeActive)
             EndHintCharge();
 
-        var showEmptyMag = _emptyMag.Update(hintParent, hintLayer, InAimHud(), HintFloor());
+        var aiming = hasState && state is eGameStateName.InLevel or eGameStateName.Lobby;
+        var showEmptyMag = _emptyMag.NeedsPresentation(aiming)
+            && _emptyMag.Update(hintParent, hintLayer, HintFloor());
         var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo || showEmptyMag;
 
         if (_root!.activeSelf != showRoot)
@@ -418,9 +467,6 @@ internal class CrosshairOverlay : MonoBehaviour
             _root.SetActive(showRoot);
             RefreshHudPass();
         }
-
-        if (showRoot)
-            ApplyRecoil();
     }
 
     private void OnEnable()
@@ -428,9 +474,16 @@ internal class CrosshairOverlay : MonoBehaviour
         Current = this;
     }
 
+    /// <summary>
+    /// Used when the recoil system did not integrate this frame.
+    /// <see cref="ApplyRecoilAfterIntegration"/> already placed the crosshair on the usual path.
+    /// </summary>
     private void LateUpdate()
     {
-        if (_root != null && _root.activeSelf)
+        if (_recoilIntegratedFrame == Time.frameCount)
+            return;
+
+        if (RootActive())
             ApplyRecoil();
     }
 
@@ -439,7 +492,7 @@ internal class CrosshairOverlay : MonoBehaviour
     /// </summary>
     internal void StartAutoAttackBlink()
     {
-        TryGetMeleeCharge(out _, out _, out var statePtr);
+        ReadMeleeCharge(out _, out _, out var statePtr);
         if (statePtr != _autoAttackBlinkChargePtr)
         {
             _autoAttackBlinkChargePtr = statePtr;
@@ -458,18 +511,22 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private float AutoAttackBlinkAmount()
     {
-        if (!TryGetMeleeCharge(out _, out _, out var statePtr))
+        if (!_charging)
         {
-            _autoAttackBlinkActive = false;
-            _autoAttackBlinkStartedAt = -1f;
-            _autoAttackBlinkChargePtr = IntPtr.Zero;
-            _autoAttackBlinkTriggers = 0;
+            if (_autoAttackBlinkActive || _autoAttackBlinkTriggers != 0 || _autoAttackBlinkChargePtr != IntPtr.Zero)
+            {
+                _autoAttackBlinkActive = false;
+                _autoAttackBlinkStartedAt = -1f;
+                _autoAttackBlinkChargePtr = IntPtr.Zero;
+                _autoAttackBlinkTriggers = 0;
+            }
+
             return 0f;
         }
 
-        if (statePtr != _autoAttackBlinkChargePtr)
+        if (_frameChargePtr != _autoAttackBlinkChargePtr)
         {
-            _autoAttackBlinkChargePtr = statePtr;
+            _autoAttackBlinkChargePtr = _frameChargePtr;
             _autoAttackBlinkTriggers = 0;
             _autoAttackBlinkActive = false;
             return 0f;
@@ -488,16 +545,25 @@ internal class CrosshairOverlay : MonoBehaviour
 
     /// <summary>
     /// Called at the end of <see cref="FPS_RecoilSystem.FPS_Update"/> so the center shape
-    /// uses the recoil point from this frame.
+    /// uses the recoil point from this frame. LateUpdate does not repeat that write.
     /// </summary>
-    internal void ApplyRecoil()
+    internal void ApplyRecoilAfterIntegration()
+    {
+        if (!RootActive())
+            return;
+
+        _recoilIntegratedFrame = Time.frameCount;
+        ApplyRecoil();
+    }
+
+    private void ApplyRecoil()
     {
         if (!Alive(_rect))
             return;
 
         if (!FollowRecoil.Value || !TryGetRecoilCanvasDelta(out var canvasDelta))
         {
-            _rect!.anchoredPosition = _restAnchored;
+            SetAnchored(_restAnchored);
             return;
         }
 
@@ -505,13 +571,37 @@ internal class CrosshairOverlay : MonoBehaviour
         var parent = _rect!.parent;
         if (!Alive(canvas) || !Alive(parent))
         {
-            _rect.anchoredPosition = _restAnchored;
+            SetAnchored(_restAnchored);
             return;
         }
 
         var worldDelta = canvas!.TransformVector(new Vector3(canvasDelta.x, canvasDelta.y, 0f));
         var localDelta = parent!.InverseTransformVector(worldDelta);
-        _rect.anchoredPosition = _restAnchored + new Vector2(localDelta.x, localDelta.y);
+        SetAnchored(_restAnchored + new Vector2(localDelta.x, localDelta.y));
+    }
+
+    private void SetAnchored(Vector2 position)
+    {
+        if (_hasAppliedAnchored && (position - _appliedAnchored).sqrMagnitude < 0.0004f)
+            return;
+
+        _rect!.anchoredPosition = position;
+        _appliedAnchored = position;
+        _hasAppliedAnchored = true;
+    }
+
+    private bool RootActive()
+    {
+        return _root != null && _root.activeSelf;
+    }
+
+    private void HideRoot()
+    {
+        if (!RootActive())
+            return;
+
+        _root!.SetActive(false);
+        RefreshHudPass();
     }
 
     private void OnDestroy()
@@ -531,17 +621,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
-                return false;
-
-            if (WieldingShotgun(player!))
-                return false;
-
-            var camera = player!.FPSCamera;
-            if (!Alive(camera))
-                return false;
-
-            var recoil = camera!.RecoilSystem;
+            var recoil = RecoilSystem();
             if (!Alive(recoil))
                 return false;
 
@@ -551,6 +631,17 @@ internal class CrosshairOverlay : MonoBehaviour
 
             var centered = view - new Vector2(0.5f, 0.5f);
             centered.y *= RecoilVerticalScale;
+            if (centered.sqrMagnitude < 0.0000001f)
+                return false;
+
+            if (WieldedFrame.IsShotgun())
+                return false;
+
+            if (_hasRecoilView && (view - _lastRecoilView).sqrMagnitude < 0.00000001f)
+            {
+                canvasDelta = _lastRecoilDelta;
+                return true;
+            }
 
             var canvas = CellCanvasRect();
             if (!Alive(canvas))
@@ -558,6 +649,9 @@ internal class CrosshairOverlay : MonoBehaviour
 
             var size = canvas!.rect.size;
             canvasDelta = new Vector2(centered.x * size.x, centered.y * size.y);
+            _lastRecoilView = view;
+            _lastRecoilDelta = canvasDelta;
+            _hasRecoilView = true;
             return true;
         }
         catch (Exception ex)
@@ -572,17 +666,19 @@ internal class CrosshairOverlay : MonoBehaviour
         }
     }
 
-    private static bool WieldingShotgun(PlayerAgent player)
+    private FPS_RecoilSystem? RecoilSystem()
     {
-        var holder = player.FPItemHolder;
-        if (!Alive(holder))
-            return false;
+        if (!WieldedFrame.TryGetPlayer(out var player) || !Alive(player))
+            return null;
 
-        var item = holder!.WieldedItem;
-        if (!Alive(item))
-            return false;
+        if (_recoilPlayer == player!.Pointer && Alive(_recoil))
+            return _recoil;
 
-        return item!.TryCast<Shotgun>() != null;
+        _recoilPlayer = player.Pointer;
+        _hasRecoilView = false;
+        var camera = player.FPSCamera;
+        _recoil = Alive(camera) ? camera!.RecoilSystem : null;
+        return Alive(_recoil) ? _recoil : null;
     }
 
     /// <summary>
@@ -650,14 +746,11 @@ internal class CrosshairOverlay : MonoBehaviour
         return _root != null && _root.Pointer != IntPtr.Zero && _parentPtr == parent.Pointer;
     }
 
-    private bool ShouldShow()
+    private bool InFpsFocus()
     {
-        if (!Enabled.Value || !InHudContext())
-            return false;
-
         try
         {
-            return WieldedCategoryIsShown();
+            return FocusStateManager.CurrentState == eFocusState.FPS;
         }
         catch (Exception ex)
         {
@@ -671,47 +764,19 @@ internal class CrosshairOverlay : MonoBehaviour
         }
     }
 
-    private bool InHudContext()
-    {
-        return InLevelFps() && (!HideWhenScoped.Value || !AimingThroughScope());
-    }
-
     /// <summary>
     /// The shooting range stays in the lobby state while the player is aiming.
     /// </summary>
-    private bool InAimHud()
+    private bool TryGetGameState(out eGameStateName state)
     {
         try
         {
-            if (FocusStateManager.CurrentState != eFocusState.FPS)
-                return false;
-
-            var state = GameStateManager.CurrentStateName;
-            return state is eGameStateName.InLevel or eGameStateName.Lobby;
+            state = GameStateManager.CurrentStateName;
+            return true;
         }
         catch (Exception ex)
         {
-            if (!_stateErrorLogged)
-            {
-                _stateErrorLogged = true;
-                Plugin.Instance.Log.LogWarning($"Empty mag HUD check failed: {ex.Message}");
-            }
-
-            return false;
-        }
-    }
-
-    private bool InLevelFps()
-    {
-        try
-        {
-            if (GameStateManager.CurrentStateName != eGameStateName.InLevel)
-                return false;
-
-            return FocusStateManager.CurrentState == eFocusState.FPS;
-        }
-        catch (Exception ex)
-        {
+            state = default;
             if (!_stateErrorLogged)
             {
                 _stateErrorLogged = true;
@@ -749,7 +814,7 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+            if (!WieldedFrame.TryGetPlayer(out var player) || !Alive(player))
                 return false;
 
             var holder = player!.FPItemHolder;
@@ -767,8 +832,7 @@ internal class CrosshairOverlay : MonoBehaviour
             if (!_hasHipLookFov)
                 RememberHipFovFromAimStart(look);
 
-            var item = holder.WieldedItem;
-            if (!Alive(item))
+            if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
                 return false;
 
             return SightMagnifies(item!);
@@ -861,14 +925,14 @@ internal class CrosshairOverlay : MonoBehaviour
             var layer = reference != null ? reference.gameObject.layer : parent.gameObject.layer;
             var centerThickness = Mathf.Clamp(CenterThickness.Value, 0.5f, 16f);
             var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
-            var hintThickness = Mathf.Clamp(HintThickness.Value, 0.5f, 16f);
-            CreateShapeSet(
+            var hintThickness = Mathf.Clamp(MeleeHintThickness.Value, 0.5f, 16f);
+            LoadShapeSet(
                 centerThickness,
                 out _centerDotsSprite,
                 out _centerArcsSprite,
                 out _centerCircleSprite,
                 out _centerLinesSprite);
-            CreateShapeSet(
+            LoadShapeSet(
                 outlineThickness,
                 out _outlineDotsSprite,
                 out _outlineArcsSprite,
@@ -887,6 +951,8 @@ internal class CrosshairOverlay : MonoBehaviour
             root.layer = layer;
             _rect = rect;
             _restAnchored = rect.anchoredPosition;
+            _appliedAnchored = _restAnchored;
+            _hasAppliedAnchored = true;
 
             _centerShape = CreateSprite(rect, sprite, "Center Shape", layer, reference);
             _outlineShape = CreateSprite(rect, sprite, "Outline Shape", layer, reference);
@@ -919,6 +985,7 @@ internal class CrosshairOverlay : MonoBehaviour
             ApplyStyle();
             HideHint();
             _root.SetActive(false);
+            SchedulePrewarm();
             Plugin.Instance.Log.LogInfo($"Crosshair attached to HUD group '{parent.name}'.");
         }
         catch (Exception ex)
@@ -945,6 +1012,7 @@ internal class CrosshairOverlay : MonoBehaviour
             if (root != null)
                 Destroy(root);
 
+            DestroyShapeCache();
             Plugin.Instance.Log.LogWarning($"Crosshair creation failed: {ex.Message}");
         }
     }
@@ -953,6 +1021,10 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         if (_root != null && _root.Pointer != IntPtr.Zero)
             Destroy(_root);
+
+        DestroyShapeCache();
+        _prewarmThicknesses.Clear();
+        _prewarmIndex = 0;
 
         _root = null;
         _rect = null;
@@ -996,6 +1068,17 @@ internal class CrosshairOverlay : MonoBehaviour
         _autoAttackBlinkChargePtr = IntPtr.Zero;
         _autoAttackBlinkTriggers = 0;
         _hintLayoutDiameter = 0f;
+        _hasAppliedAnchored = false;
+        _appliedAnchored = Vector2.zero;
+        _hintVisible = true;
+        _steadyHintKey = int.MinValue;
+        _steadyHintHex = null;
+        _steadyHintOpacity = -1f;
+        _charging = false;
+        _frameChargePtr = IntPtr.Zero;
+        _recoil = null;
+        _recoilPlayer = IntPtr.Zero;
+        _hasRecoilView = false;
         _packHints.Detach();
         _itemHints.Detach();
         _toolHints.Detach();
@@ -1107,6 +1190,117 @@ internal class CrosshairOverlay : MonoBehaviour
         }
     }
 
+    private void LoadShapeSet(
+        float thickness,
+        out Sprite? dots,
+        out Sprite? arcs,
+        out Sprite? circle,
+        out Sprite? lines)
+    {
+        thickness = NormalizedShapeThickness(thickness);
+        var key = Mathf.RoundToInt(thickness * 4f);
+        if (!_shapeCache.TryGetValue(key, out var sprites) || sprites == null)
+        {
+            CreateShapeSet(thickness, out dots, out arcs, out circle, out lines);
+            _shapeCache[key] = new[] { dots, arcs, circle, lines };
+            return;
+        }
+
+        dots = sprites[0];
+        arcs = sprites[1];
+        circle = sprites[2];
+        lines = sprites[3];
+    }
+
+    /// <summary>
+    /// Builds the thicknesses a blink or melee warning will ask for, one set per later update,
+    /// so the first charge does not upload those textures in the same frames as the animation.
+    /// </summary>
+    private void SchedulePrewarm()
+    {
+        _prewarmThicknesses.Clear();
+        _prewarmIndex = 0;
+        AddPrewarmRange(CenterThickness.Value, AutoAttackBlinkThicknessIncrease.Value);
+        AddPrewarmRange(OutlineThickness.Value, AutoAttackBlinkThicknessIncrease.Value);
+        AddPrewarmRange(MeleeHintThickness.Value, MeleeHintAutoAttackThicknessIncrease.Value);
+    }
+
+    private void AddPrewarmRange(float baseThickness, float increasePercent)
+    {
+        var increase = Mathf.Clamp(increasePercent, 0f, 200f) * 0.01f;
+        var start = NormalizedShapeThickness(baseThickness);
+        var end = NormalizedShapeThickness(baseThickness * (1f + increase));
+        if (end < start)
+            (start, end) = (end, start);
+
+        var steps = Mathf.RoundToInt((end - start) * 4f);
+        for (var i = 0; i <= steps; i++)
+        {
+            var thickness = start + i * 0.25f;
+            var listed = false;
+            for (var n = 0; n < _prewarmThicknesses.Count; n++)
+            {
+                if (Mathf.Approximately(_prewarmThicknesses[n], thickness))
+                {
+                    listed = true;
+                    break;
+                }
+            }
+
+            if (!listed)
+                _prewarmThicknesses.Add(thickness);
+        }
+    }
+
+    private void AdvancePrewarm()
+    {
+        var built = 0;
+        while (_prewarmIndex < _prewarmThicknesses.Count && built < 1)
+        {
+            var thickness = _prewarmThicknesses[_prewarmIndex];
+            _prewarmIndex++;
+            var key = Mathf.RoundToInt(NormalizedShapeThickness(thickness) * 4f);
+            if (_shapeCache.ContainsKey(key))
+                continue;
+
+            try
+            {
+                LoadShapeSet(thickness, out _, out _, out _, out _);
+                built++;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Instance.Log.LogWarning($"Crosshair shape prewarm failed: {ex.Message}");
+                built++;
+            }
+        }
+    }
+
+    private void DestroyShapeCache()
+    {
+        foreach (var sprites in _shapeCache.Values)
+        {
+            if (sprites == null)
+                continue;
+
+            for (var i = 0; i < sprites.Length; i++)
+                DestroySprite(sprites[i]);
+        }
+
+        _shapeCache.Clear();
+    }
+
+    private static void DestroySprite(Sprite? sprite)
+    {
+        if (sprite == null)
+            return;
+
+        var texture = sprite.texture;
+        UnityEngine.Object.Destroy(sprite);
+        if (texture != null)
+            UnityEngine.Object.Destroy(texture);
+    }
+
     private static void CreateShapeSet(
         float thickness,
         out Sprite? dots,
@@ -1114,7 +1308,7 @@ internal class CrosshairOverlay : MonoBehaviour
         out Sprite? circle,
         out Sprite? lines)
     {
-        dots = ShapeSprite(ReticleShape.TwoDots, thickness);
+        dots = ShapeSprite(ReticleShape.Dots, thickness);
         arcs = ShapeSprite(ReticleShape.Arcs, thickness);
         circle = ShapeSprite(ReticleShape.Circle, thickness);
         lines = ShapeSprite(ReticleShape.Lines, thickness);
@@ -1127,12 +1321,14 @@ internal class CrosshairOverlay : MonoBehaviour
         var thickness = Mathf.Clamp(configuredThickness, 0.5f, 16f) * resolutionScale;
         var dotRadius = Mathf.Clamp(thickness * 1.33f, resolutionScale, 7f * resolutionScale);
         var tex = new Texture2D(textureSize, textureSize, TextureFormat.RGBA32, false);
+        var pixels = PixelBuffer();
         var center = (textureSize - 1) * 0.5f;
         var radius = textureSize * 0.5f - resolutionScale;
         var dotOffset = radius - dotRadius;
 
         for (var y = 0; y < textureSize; y++)
         {
+            var row = y * textureSize;
             for (var x = 0; x < textureSize; x++)
             {
                 var dx = x - center;
@@ -1146,7 +1342,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
                 switch (shape)
                 {
-                    case ReticleShape.TwoDots:
+                    case ReticleShape.Dots:
                         var leftDistance = Mathf.Sqrt((dx + dotOffset) * (dx + dotOffset) + dy * dy);
                         var rightDistance = Mathf.Sqrt((dx - dotOffset) * (dx - dotOffset) + dy * dy);
                         alpha = Mathf.Clamp01(dotRadius + 0.5f - Mathf.Min(leftDistance, rightDistance));
@@ -1170,11 +1366,12 @@ internal class CrosshairOverlay : MonoBehaviour
                         break;
                 }
 
-                tex.SetPixel(x, y, new Color(1f, 1f, 1f, alpha));
+                pixels[row + x] = new Color32(255, 255, 255, AlphaByte(alpha));
             }
         }
 
-        tex.Apply();
+        tex.SetPixels32(pixels);
+        tex.Apply(false);
         tex.filterMode = FilterMode.Bilinear;
         tex.wrapMode = TextureWrapMode.Clamp;
         tex.hideFlags = HideFlags.HideAndDontSave;
@@ -1188,6 +1385,24 @@ internal class CrosshairOverlay : MonoBehaviour
             SpriteMeshType.FullRect);
         sprite.hideFlags = HideFlags.HideAndDontSave;
         return sprite;
+    }
+
+    private static Color32[] PixelBuffer()
+    {
+        const int length = 64 * 64;
+        if (_pixels == null || _pixels.Length != length)
+            _pixels = new Color32[length];
+        return _pixels;
+    }
+
+    private static byte AlphaByte(float alpha)
+    {
+        var value = Mathf.RoundToInt(alpha * 255f);
+        if (value < 0)
+            return 0;
+        if (value > 255)
+            return 255;
+        return (byte)value;
     }
 
     private void ApplyStyle()
@@ -1282,20 +1497,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private static bool TryGetWieldedSlot(out InventorySlot slot)
     {
-        slot = InventorySlot.None;
-        if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
-            return false;
-
-        var holder = player!.FPItemHolder;
-        if (!Alive(holder))
-            return false;
-
-        var item = holder!.WieldedItem;
-        if (!Alive(item) || !Alive(item!.ItemDataBlock))
-            return false;
-
-        slot = item.ItemDataBlock!.inventorySlot;
-        return true;
+        return WieldedFrame.TryGetSlot(out slot);
     }
 
     private static float VisibleOutlineSize(
@@ -1312,7 +1514,7 @@ internal class CrosshairOverlay : MonoBehaviour
         var changed = false;
         if (!Mathf.Approximately(centerThickness, _appliedCenterThickness))
         {
-            CreateShapeSet(
+            LoadShapeSet(
                 centerThickness,
                 out _centerDotsSprite,
                 out _centerArcsSprite,
@@ -1324,7 +1526,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
         if (!Mathf.Approximately(outlineThickness, _appliedOutlineThickness))
         {
-            CreateShapeSet(
+            LoadShapeSet(
                 outlineThickness,
                 out _outlineDotsSprite,
                 out _outlineArcsSprite,
@@ -1340,29 +1542,15 @@ internal class CrosshairOverlay : MonoBehaviour
     private void ApplyHintThickness(float thickness)
     {
         thickness = NormalizedShapeThickness(thickness);
-        if (Mathf.Approximately(thickness, _appliedHintThickness))
+        if (Mathf.Approximately(thickness, _appliedHintThickness) && _hintDotsSprite != null)
             return;
 
-        var cacheKey = Mathf.RoundToInt(thickness * 4f);
-        if (_hintShapeCache.TryGetValue(cacheKey, out var sprites))
-        {
-            _hintDotsSprite = sprites[0];
-            _hintArcsSprite = sprites[1];
-            _hintCircleSprite = sprites[2];
-            _hintLinesSprite = sprites[3];
-        }
-        else
-        {
-            CreateShapeSet(
-                thickness,
-                out _hintDotsSprite,
-                out _hintArcsSprite,
-                out _hintCircleSprite,
-                out _hintLinesSprite);
-            _hintShapeCache[cacheKey] =
-                new[] { _hintDotsSprite, _hintArcsSprite, _hintCircleSprite, _hintLinesSprite };
-        }
-
+        LoadShapeSet(
+            thickness,
+            out _hintDotsSprite,
+            out _hintArcsSprite,
+            out _hintCircleSprite,
+            out _hintLinesSprite);
         _appliedHintThickness = thickness;
     }
 
@@ -1391,7 +1579,7 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         return shape switch
         {
-            ReticleShape.TwoDots => _centerDotsSprite,
+            ReticleShape.Dots => _centerDotsSprite,
             ReticleShape.Arcs => _centerArcsSprite,
             ReticleShape.Lines => _centerLinesSprite,
             _ => _centerCircleSprite
@@ -1402,7 +1590,7 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         return shape switch
         {
-            ReticleShape.TwoDots => _outlineDotsSprite,
+            ReticleShape.Dots => _outlineDotsSprite,
             ReticleShape.Arcs => _outlineArcsSprite,
             ReticleShape.Lines => _outlineLinesSprite,
             _ => _outlineCircleSprite
@@ -1437,7 +1625,7 @@ internal class CrosshairOverlay : MonoBehaviour
     /// </summary>
     private void ApplyHint()
     {
-        if (!HintEnabled.Value)
+        if (!MeleeHintEnabled.Value)
         {
             if (_hintChargeActive)
                 EndHintCharge();
@@ -1446,17 +1634,21 @@ internal class CrosshairOverlay : MonoBehaviour
             return;
         }
 
-        if (!TryGetMeleeCharge(out var progress, out var autoStrikeWarningProgress, out var statePtr))
+        if (!_charging)
         {
             if (_hintChargeActive)
                 EndHintCharge();
 
-            if (HintShowAlways.Value)
+            if (MeleeHintShowAlways.Value)
                 ShowHintAtOriginalSize();
             else
                 HideHint();
             return;
         }
+
+        var progress = _chargeProgress;
+        var autoStrikeWarningProgress = _chargeWarning;
+        var statePtr = _frameChargePtr;
 
         var chargeJustStarted = !_hintChargeActive || statePtr != _chargeStatePtr;
         if (chargeJustStarted)
@@ -1473,8 +1665,8 @@ internal class CrosshairOverlay : MonoBehaviour
             : Mathf.Lerp(targetSize, readySize, progress);
         var color = ConfiguredHintColor();
         var easedWarning = autoStrikeWarningProgress * autoStrikeWarningProgress;
-        var baseThickness = Mathf.Clamp(HintThickness.Value, 0.5f, 16f);
-        var thicknessIncrease = Mathf.Clamp(HintAutoAttackThicknessIncrease.Value, 0f, 200f) * 0.01f;
+        var baseThickness = Mathf.Clamp(MeleeHintThickness.Value, 0.5f, 16f);
+        var thicknessIncrease = Mathf.Clamp(MeleeHintAutoAttackThicknessIncrease.Value, 0f, 200f) * 0.01f;
         ApplyHintThickness(baseThickness * (1f + thicknessIncrease * easedWarning));
         diameter = HintDiameterWithThicknessSpacing(
             diameter,
@@ -1483,27 +1675,44 @@ internal class CrosshairOverlay : MonoBehaviour
         ApplyHintSprite();
         if (autoStrikeWarningProgress > 0f)
         {
-            var autoAttackColor = ParseColor(HintAutoAttackColorHex.Value, Color.white);
-            autoAttackColor.a *= Mathf.Clamp01(HintOpacity.Value);
+            var autoAttackColor = ParseColor(MeleeHintAutoAttackColorHex.Value, Color.white);
+            autoAttackColor.a *= Mathf.Clamp01(MeleeHintOpacity.Value);
             color = Color.Lerp(color, autoAttackColor, easedWarning);
         }
         _hintLayoutDiameter = diameter;
+        _hintVisible = true;
+        _steadyHintKey = int.MinValue;
         SetSprite(_hintShape!, color, diameter);
     }
 
     private void ShowHintAtOriginalSize()
     {
-        ApplyHintThickness(Mathf.Clamp(HintThickness.Value, 0.5f, 16f));
+        var thickness = Mathf.Clamp(MeleeHintThickness.Value, 0.5f, 16f);
+        ApplyHintThickness(thickness);
         ApplyHintSprite();
         var diameter = HintOriginalSize(CurrentCrosshairDiameter());
+        var key = Mathf.RoundToInt(NormalizedShapeThickness(thickness) * 4f) * 100000
+            + Mathf.RoundToInt(diameter * 4f);
+        var colorHex = MeleeHintColorHex.Value;
+        var opacity = Mathf.Clamp01(MeleeHintOpacity.Value);
+        if (_hintVisible
+            && key == _steadyHintKey
+            && colorHex == _steadyHintHex
+            && Mathf.Approximately(opacity, _steadyHintOpacity))
+            return;
+
+        _steadyHintKey = key;
+        _steadyHintHex = colorHex;
+        _steadyHintOpacity = opacity;
         _hintLayoutDiameter = diameter;
+        _hintVisible = true;
         SetSprite(_hintShape!, ConfiguredHintColor(), diameter);
     }
 
     private static Color ConfiguredHintColor()
     {
-        var color = ParseColor(HintColorHex.Value, new Color(1f, 0.05f, 0.08f, 1f));
-        color.a *= Mathf.Clamp01(HintOpacity.Value);
+        var color = ParseColor(MeleeHintColorHex.Value, new Color(1f, 0.05f, 0.08f, 1f));
+        color.a *= Mathf.Clamp01(MeleeHintOpacity.Value);
         return color;
     }
 
@@ -1546,7 +1755,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private static float HintOriginalSize(float crosshairDiameter)
     {
         return Mathf.Max(
-            Mathf.Clamp(HintSize.Value, 8, 64),
+            Mathf.Clamp(MeleeHintSize.Value, 8, 64),
             crosshairDiameter + HintReadyPadding);
     }
 
@@ -1568,9 +1777,9 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private Sprite? SelectedHintSprite()
     {
-        return ParseShape(HintShape.Value) switch
+        return ParseShape(MeleeHintShape.Value) switch
         {
-            ReticleShape.TwoDots => _hintDotsSprite,
+            ReticleShape.Dots => _hintDotsSprite,
             ReticleShape.Arcs => _hintArcsSprite,
             ReticleShape.Lines => _hintLinesSprite,
             _ => _hintCircleSprite
@@ -1581,7 +1790,7 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         return value switch
         {
-            "Two dots" => ReticleShape.TwoDots,
+            "Two dots" => ReticleShape.Dots,
             "Arcs" => ReticleShape.Arcs,
             "Circle" => ReticleShape.Circle,
             "Lines" => ReticleShape.Lines,
@@ -1596,7 +1805,7 @@ internal class CrosshairOverlay : MonoBehaviour
         HideHint();
     }
 
-    private bool TryGetMeleeCharge(out float progress, out float autoStrikeWarningProgress, out IntPtr statePtr)
+    private bool ReadMeleeCharge(out float progress, out float autoStrikeWarningProgress, out IntPtr statePtr)
     {
         progress = 0f;
         autoStrikeWarningProgress = 0f;
@@ -1604,19 +1813,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
-                return false;
-
-            var holder = player!.FPItemHolder;
-            if (!Alive(holder))
-                return false;
-
-            var item = holder!.WieldedItem;
-            if (!Alive(item))
-                return false;
-
-            var melee = item!.TryCast<MeleeWeaponFirstPerson>();
-            if (!Alive(melee))
+            if (!WieldedFrame.TryGetMelee(out var melee) || !Alive(melee))
                 return false;
 
             var stateName = melee!.CurrentStateName;
@@ -1665,7 +1862,14 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private void HideHint()
     {
+        if (!_hintVisible && _hintLayoutDiameter <= 0f)
+            return;
+
         _hintLayoutDiameter = 0f;
+        _hintVisible = false;
+        _steadyHintKey = int.MinValue;
+        _steadyHintHex = null;
+        _steadyHintOpacity = -1f;
         var renderer = _hintShape?.m_sprite;
         if (renderer != null)
             renderer.color = new Color(1f, 0.05f, 0.08f, 0f);
@@ -1673,15 +1877,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private static Color ParseColor(string raw, Color? fallback = null)
     {
-        var missing = fallback ?? DefaultColor();
-        var text = (raw ?? string.Empty).Trim();
-        if (text.Length == 0)
-            return missing;
-
-        if (!text.StartsWith("#", StringComparison.Ordinal))
-            text = "#" + text;
-
-        return ColorUtility.TryParseHtmlString(text, out var color) ? color : missing;
+        return HudColor.Parse(raw, fallback ?? DefaultColor());
     }
 
     private static Color DefaultColor()

@@ -51,6 +51,14 @@ internal sealed class ItemHintOverlay
     private int _appliedSize = -1;
     private float _appliedOpacity = -1f;
     private bool _errorLogged;
+    private bool _hidden = true;
+    private IntPtr _itemPtr;
+    private bool _supported;
+    private ItemHintKind _kind;
+    private int _uses = int.MinValue;
+    private string _capacity = string.Empty;
+    private Color _color;
+    private string? _styleHex;
 
     public static void Bind(ConfigFile config)
     {
@@ -124,6 +132,7 @@ internal sealed class ItemHintOverlay
         _appliedColorHex = colorHex;
         _appliedSize = size;
         _appliedOpacity = opacity;
+        _hidden = false;
         return true;
     }
 
@@ -136,6 +145,11 @@ internal sealed class ItemHintOverlay
     {
         DestroyText(ref _capacityText);
         ResetAppliedStyle();
+        _itemPtr = IntPtr.Zero;
+        _supported = false;
+        _styleHex = null;
+        _uses = int.MinValue;
+        _hidden = true;
     }
 
     private static ConfigEntry<string> BindColor(ConfigFile config, string section, string key, string naming, string defaultHex)
@@ -149,6 +163,10 @@ internal sealed class ItemHintOverlay
 
     private void Hide()
     {
+        if (_hidden)
+            return;
+
+        _hidden = true;
         ResetAppliedStyle();
         HideText(_capacityText);
     }
@@ -184,9 +202,8 @@ internal sealed class ItemHintOverlay
             text.color = color;
             text.ForceMeshUpdate();
             appliedValue = value;
+            text.rectTransform.anchoredPosition = anchoredPosition;
         }
-
-        text.rectTransform.anchoredPosition = anchoredPosition;
     }
 
     private TextMeshPro? Create(
@@ -256,18 +273,38 @@ internal sealed class ItemHintOverlay
 
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+            if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
                 return false;
 
-            var holder = player!.FPItemHolder;
-            if (!Alive(holder))
+            var ptr = item!.Pointer;
+            if (ptr != _itemPtr)
+            {
+                _itemPtr = ptr;
+                _uses = int.MinValue;
+                _styleHex = null;
+                _supported = TryClassify(item, out _kind);
+            }
+
+            if (!_supported)
                 return false;
 
-            var item = holder!.WieldedItem;
-            if (!Alive(item) || !TryGetItemStyle(item!, out color, out colorHex))
-                return false;
+            var hex = HexFor(_kind);
+            if (hex != _styleHex)
+            {
+                _styleHex = hex;
+                _color = ParseColor(hex, Color.white);
+            }
 
-            capacity = RemainingUses(item!).ToString();
+            var uses = RemainingUses(item);
+            if (uses != _uses)
+            {
+                _uses = uses;
+                _capacity = uses.ToString();
+            }
+
+            capacity = _capacity;
+            color = _color;
+            colorHex = _styleHex ?? string.Empty;
             return true;
         }
         catch (Exception ex)
@@ -277,16 +314,9 @@ internal sealed class ItemHintOverlay
         }
     }
 
-    private static bool TryGetItemStyle(ItemEquippable item, out Color color, out string colorHex)
+    private static string HexFor(ItemHintKind kind)
     {
-        if (!TryClassify(item, out var kind))
-        {
-            color = Color.white;
-            colorHex = string.Empty;
-            return false;
-        }
-
-        colorHex = kind switch
+        return kind switch
         {
             ItemHintKind.Glow => GlowColorHex.Value,
             ItemHintKind.Fog => FogColorHex.Value,
@@ -299,9 +329,6 @@ internal sealed class ItemHintOverlay
             ItemHintKind.Flash => FlashColorHex.Value,
             _ => HeavyFogColorHex.Value
         };
-
-        color = ParseColor(colorHex, Color.white);
-        return true;
     }
 
     /// <summary>
@@ -491,15 +518,10 @@ internal sealed class ItemHintOverlay
 
     private static Color ParseColor(string raw, Color fallback)
     {
-        var text = (raw ?? string.Empty).Trim();
-        if (text.Length == 0)
+        if (string.IsNullOrWhiteSpace(raw))
             return fallback;
 
-        if (!text.StartsWith("#", StringComparison.Ordinal))
-            text = "#" + text;
-
-        var parsed = ColorUtility.TryParseHtmlString(text, out var color) ? color : fallback;
-        return BoostSaturation(parsed);
+        return BoostSaturation(HudColor.Parse(raw, fallback));
     }
 
     private static Color BoostSaturation(Color color)

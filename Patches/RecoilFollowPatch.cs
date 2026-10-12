@@ -12,6 +12,6 @@ internal static class RecoilFollowPatch
     [HarmonyPostfix]
     private static void AfterRecoilUpdate()
     {
-        CrosshairOverlay.Current?.ApplyRecoil();
+        CrosshairOverlay.Current?.ApplyRecoilAfterIntegration();
     }
 }

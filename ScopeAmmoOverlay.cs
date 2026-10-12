@@ -34,6 +34,16 @@ internal sealed class ScopeAmmoOverlay
     private int _appliedSize = -1;
     private float _appliedMargin = -1f;
     private bool _errorLogged;
+    private bool _hidden = true;
+    private int _clip = -1;
+    private int _magazineSize = -1;
+    private int _reserveRounds = -1;
+    private string _magazineValue = string.Empty;
+    private string _reserveValue = string.Empty;
+    private Color _fullColor = Color.white;
+    private Color _lowColor = new(1f, 0.165f, 0.165f, 1f);
+    private string? _parsedColorHex;
+    private string? _parsedLowHex;
 
     public static void Bind(ConfigFile config)
     {
@@ -104,14 +114,20 @@ internal sealed class ScopeAmmoOverlay
         var colorHex = ColorHex.Value;
         var lowColorHex = LowColorHex.Value;
         var lowColorEnabled = LowColorEnabled.Value;
+        if (colorHex != _parsedColorHex || lowColorHex != _parsedLowHex)
+        {
+            _parsedColorHex = colorHex;
+            _parsedLowHex = lowColorHex;
+            _fullColor = ParseColor(colorHex, Color.white);
+            _lowColor = ParseColor(lowColorHex, new Color(1f, 0.165f, 0.165f, _fullColor.a));
+        }
+
         var styleChanged = colorHex != _appliedColorHex
             || lowColorHex != _appliedLowColorHex
             || lowColorEnabled != _appliedLowColorEnabled
             || size != _appliedSize;
-        var full = ParseColor(colorHex, Color.white);
-        var low = ParseColor(lowColorHex, new Color(1f, 0.165f, 0.165f, full.a));
-        var magazineColor = lowColorEnabled ? Color.Lerp(low, full, magazineLeft) : full;
-        var reserveColor = lowColorEnabled ? Color.Lerp(low, full, reserveLeft) : full;
+        var magazineColor = lowColorEnabled ? Color.Lerp(_lowColor, _fullColor, magazineLeft) : _fullColor;
+        var reserveColor = lowColorEnabled ? Color.Lerp(_lowColor, _fullColor, reserveLeft) : _fullColor;
         var lineStep = size * 2.2f;
         ApplyLabel(
             _magazineText!,
@@ -139,6 +155,7 @@ internal sealed class ScopeAmmoOverlay
         _appliedLowColorEnabled = lowColorEnabled;
         _appliedSize = size;
         _appliedMargin = margin;
+        _hidden = false;
         return true;
     }
 
@@ -177,28 +194,34 @@ internal sealed class ScopeAmmoOverlay
 
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
-                return false;
+        if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
+            return false;
 
-            var holder = player!.FPItemHolder;
-            if (!Alive(holder))
-                return false;
+        var clip = Math.Max(0, item!.GetCurrentClip());
+        var mag = Math.Max(0, item.GetMaxClip());
+        if (mag <= 0)
+            return false;
 
-            var item = holder!.WieldedItem;
-            if (!Alive(item))
-                return false;
+        var ammo = SlotAmmo(item);
+        var reserveRounds = CountReserve(ammo);
+        if (clip != _clip || mag != _magazineSize)
+        {
+            _clip = clip;
+            _magazineSize = mag;
+            _magazineValue = clip + " / " + mag;
+        }
 
-            var clip = Math.Max(0, item!.GetCurrentClip());
-            var mag = Math.Max(0, item.GetMaxClip());
-            if (mag <= 0)
-                return false;
+        if (reserveRounds != _reserveRounds)
+        {
+            _reserveRounds = reserveRounds;
+            _reserveValue = reserveRounds.ToString();
+        }
 
-            var reserveRounds = ReserveAmmo(item);
-            magazine = clip + " / " + mag;
-            reserve = reserveRounds.ToString();
-            magazineLeft = Mathf.Clamp01(clip / (float)mag);
-            reserveLeft = ReserveLeft(item, reserveRounds);
-            return true;
+        magazine = _magazineValue;
+        reserve = _reserveValue;
+        magazineLeft = Mathf.Clamp01(clip / (float)mag);
+        reserveLeft = ReserveLeft(ammo, reserveRounds);
+        return true;
         }
         catch (Exception ex)
         {
@@ -207,17 +230,8 @@ internal sealed class ScopeAmmoOverlay
         }
     }
 
-    private static int ReserveAmmo(ItemEquippable item)
+    private static int CountReserve(InventorySlotAmmo? ammo)
     {
-        var ammoType = item.AmmoType;
-        if (ammoType is AmmoType.None or AmmoType.CurrentConsumable or AmmoType.ResourcePackRel)
-            return 0;
-
-        var backpack = PlayerBackpackManager.LocalBackpack;
-        if (!Alive(backpack) || !Alive(backpack!.AmmoStorage))
-            return 0;
-
-        var ammo = backpack.AmmoStorage!.GetInventorySlotAmmo(ammoType);
         if (!Alive(ammo))
             return 0;
 
@@ -234,12 +248,11 @@ internal sealed class ScopeAmmoOverlay
     /// Share of reserve ammo still outside the magazine. Bullet packs use their bullet cap.
     /// Other packs use the ammo cap, then the pack's own relative fill.
     /// </summary>
-    private static float ReserveLeft(ItemEquippable item, int displayed)
+    private static float ReserveLeft(InventorySlotAmmo? ammo, int displayed)
     {
         if (displayed <= 0)
             return 0f;
 
-        var ammo = SlotAmmo(item);
         if (!Alive(ammo))
             return 1f;
 
@@ -268,6 +281,10 @@ internal sealed class ScopeAmmoOverlay
 
     private void Hide()
     {
+        if (_hidden)
+            return;
+
+        _hidden = true;
         ResetAppliedStyle();
         HideText(_magazineText);
         HideText(_reserveText);
@@ -302,9 +319,8 @@ internal sealed class ScopeAmmoOverlay
             text.color = color;
             text.ForceMeshUpdate();
             appliedValue = value;
+            text.rectTransform.anchoredPosition = anchoredPosition;
         }
-
-        text.rectTransform.anchoredPosition = anchoredPosition;
     }
 
     private TextMeshPro? Create(Transform parent, int layer, string name)
@@ -415,14 +431,7 @@ internal sealed class ScopeAmmoOverlay
 
     private static Color ParseColor(string raw, Color fallback)
     {
-        var text = (raw ?? string.Empty).Trim();
-        if (text.Length == 0)
-            return fallback;
-
-        if (!text.StartsWith("#", StringComparison.Ordinal))
-            text = "#" + text;
-
-        return ColorUtility.TryParseHtmlString(text, out var color) ? color : fallback;
+        return HudColor.Parse(raw, fallback);
     }
 
     private static bool Alive(Il2CppObjectBase? obj)

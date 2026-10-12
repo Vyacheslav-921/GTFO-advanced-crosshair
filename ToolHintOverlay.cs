@@ -41,6 +41,14 @@ internal sealed class ToolHintOverlay
     private string? _appliedColorHex;
     private int _appliedSize = -1;
     private bool _errorLogged;
+    private bool _hidden = true;
+    private IntPtr _itemPtr;
+    private bool _supported;
+    private ToolHintKind _kind;
+    private int _percent = int.MinValue;
+    private string _capacity = string.Empty;
+    private Color _color;
+    private string? _styleHex;
 
     public static void Bind(ConfigFile config)
     {
@@ -96,6 +104,7 @@ internal sealed class ToolHintOverlay
 
         _appliedColorHex = colorHex;
         _appliedSize = size;
+        _hidden = false;
         return true;
     }
 
@@ -108,6 +117,11 @@ internal sealed class ToolHintOverlay
     {
         DestroyText(ref _capacityText);
         ResetAppliedStyle();
+        _itemPtr = IntPtr.Zero;
+        _supported = false;
+        _styleHex = null;
+        _percent = int.MinValue;
+        _hidden = true;
     }
 
     private static ConfigEntry<string> BindColor(ConfigFile config, string section, string key, string naming, string defaultHex)
@@ -121,6 +135,10 @@ internal sealed class ToolHintOverlay
 
     private void Hide()
     {
+        if (_hidden)
+            return;
+
+        _hidden = true;
         ResetAppliedStyle();
         HideText(_capacityText);
     }
@@ -155,9 +173,8 @@ internal sealed class ToolHintOverlay
             text.color = color;
             text.ForceMeshUpdate();
             appliedValue = value;
+            text.rectTransform.anchoredPosition = Vector2.zero;
         }
-
-        text.rectTransform.anchoredPosition = Vector2.zero;
     }
 
     private TextMeshPro? Create(Transform parent, int layer, string name)
@@ -222,20 +239,40 @@ internal sealed class ToolHintOverlay
 
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+            if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
                 return false;
 
-            var holder = player!.FPItemHolder;
-            if (!Alive(holder))
+            var ptr = item!.Pointer;
+            if (ptr != _itemPtr)
+            {
+                _itemPtr = ptr;
+                _percent = int.MinValue;
+                _styleHex = null;
+                _supported = TryClassify(item, out _kind);
+            }
+
+            if (!_supported)
                 return false;
 
-            var item = holder!.WieldedItem;
-            if (!Alive(item) || !TryGetToolStyle(item!, out color, out colorHex))
+            var hex = HexFor(_kind);
+            if (hex != _styleHex)
+            {
+                _styleHex = hex;
+                _color = ParseColor(hex, Color.white);
+            }
+
+            if (!TryGetPercent(item, out var percent))
                 return false;
 
-            if (!TryGetCapacity(item!, out capacity))
-                return false;
+            if (percent != _percent)
+            {
+                _percent = percent;
+                _capacity = percent + "%";
+            }
 
+            capacity = _capacity;
+            color = _color;
+            colorHex = _styleHex ?? string.Empty;
             return true;
         }
         catch (Exception ex)
@@ -245,16 +282,9 @@ internal sealed class ToolHintOverlay
         }
     }
 
-    private static bool TryGetToolStyle(ItemEquippable item, out Color color, out string colorHex)
+    private static string HexFor(ToolHintKind kind)
     {
-        if (!TryClassify(item, out var kind))
-        {
-            color = Color.white;
-            colorHex = string.Empty;
-            return false;
-        }
-
-        colorHex = kind switch
+        return kind switch
         {
             ToolHintKind.Turret => TurretColorHex.Value,
             ToolHintKind.Foam => FoamColorHex.Value,
@@ -262,8 +292,6 @@ internal sealed class ToolHintOverlay
             ToolHintKind.FoamMine => FoamMineColorHex.Value,
             _ => BioTrackerColorHex.Value
         };
-        color = ParseColor(colorHex, Color.white);
-        return true;
     }
 
     /// <summary>
@@ -311,9 +339,9 @@ internal sealed class ToolHintOverlay
     /// Turret, foam launcher, and mine deployer share the class-tool pool.
     /// The bio tracker is marked infinite, so it has no capacity number.
     /// </summary>
-    private static bool TryGetCapacity(ItemEquippable item, out string capacity)
+    private static bool TryGetPercent(ItemEquippable item, out int percent)
     {
-        capacity = string.Empty;
+        percent = 0;
         var block = Alive(item.ItemDataBlock) ? item.ItemDataBlock : null;
         if (block != null && block!.GUIShowAmmoInfinite)
             return false;
@@ -331,8 +359,7 @@ internal sealed class ToolHintOverlay
         var relative = ammo!.AmmoMaxCap > 0.0001f
             ? ammo.AmmoInPack / ammo.AmmoMaxCap
             : ammo.RelInPack;
-        var percent = Mathf.Clamp(Mathf.RoundToInt(relative * 100f), 0, 100);
-        capacity = percent + "%";
+        percent = Mathf.Clamp(Mathf.RoundToInt(relative * 100f), 0, 100);
         return true;
     }
 
@@ -430,15 +457,10 @@ internal sealed class ToolHintOverlay
 
     private static Color ParseColor(string raw, Color fallback)
     {
-        var text = (raw ?? string.Empty).Trim();
-        if (text.Length == 0)
+        if (string.IsNullOrWhiteSpace(raw))
             return fallback;
 
-        if (!text.StartsWith("#", StringComparison.Ordinal))
-            text = "#" + text;
-
-        var parsed = ColorUtility.TryParseHtmlString(text, out var color) ? color : fallback;
-        return BoostSaturation(parsed);
+        return BoostSaturation(HudColor.Parse(raw, fallback));
     }
 
     private static Color BoostSaturation(Color color)

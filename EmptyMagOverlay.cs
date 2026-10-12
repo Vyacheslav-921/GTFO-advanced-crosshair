@@ -23,7 +23,7 @@ internal sealed class EmptyMagOverlay
     private const float TmpPointsPerHudUnit = 10f;
     private const float BelowHintGap = 6f;
     private const float MinimumDrop = 24f;
-    private const float ShimmerSpeed = 7.5f;
+    private const float ShimmerSpeed = 6f;
     private const float ShimmerCharacterLag = 0.7f;
 
     private TextMeshPro? _label;
@@ -31,6 +31,12 @@ internal sealed class EmptyMagOverlay
     private int _appliedSize = -1;
     private bool _shimmerFailed;
     private bool _errorLogged;
+    private bool _hidden = true;
+    private bool _wordReady;
+    private bool _meshReady;
+    private float _appliedTop = float.NaN;
+    private Color _parsedColor;
+    private string? _parsedColorHex;
 
     public static void Bind(ConfigFile config)
     {
@@ -59,13 +65,13 @@ internal sealed class EmptyMagOverlay
         ShimmerIntensity = config.Bind(
             section,
             "Shimmer intensity",
-            0.7f,
+            0.6f,
             new ConfigDescription(
                 "How strongly EMPTY gleams. 0 keeps a steady color, 1 is the strongest shimmer.",
                 new AcceptableValueRange<float>(0f, 1f)));
     }
 
-    public bool Update(Transform? parent, int layer, bool aiming, float contentFloor)
+    public bool NeedsPresentation(bool aiming)
     {
         if (!Enabled.Value || !aiming || !MagazineIsEmpty())
         {
@@ -73,6 +79,11 @@ internal sealed class EmptyMagOverlay
             return false;
         }
 
+        return true;
+    }
+
+    public bool Update(Transform? parent, int layer, float contentFloor)
+    {
         if (!Alive(parent))
             return false;
 
@@ -84,26 +95,40 @@ internal sealed class EmptyMagOverlay
         var size = Mathf.Clamp(Size.Value, 2, 48);
         var intensity = Mathf.Clamp01(ShimmerIntensity.Value);
         var colorHex = ColorHex.Value;
-        var color = ParseColor(colorHex, new Color(1f, 0.165f, 0.165f, 1f));
+        if (colorHex != _parsedColorHex)
+        {
+            _parsedColorHex = colorHex;
+            _parsedColor = ParseColor(colorHex, new Color(1f, 0.165f, 0.165f, 1f));
+        }
+
+        var color = _parsedColor;
         var styleChanged = colorHex != _appliedColorHex || size != _appliedSize;
         var text = _label!;
         if (!text.gameObject.activeSelf)
             text.gameObject.SetActive(true);
 
-        if (styleChanged || text.text != Word)
+        if (styleChanged || !_wordReady)
         {
             text.text = Word;
             text.fontSize = size * TmpPointsPerHudUnit;
             text.rectTransform.sizeDelta = new Vector2(size * 8f, size * 2.5f);
             text.color = color;
             text.ForceMeshUpdate();
+            _wordReady = true;
+            _meshReady = true;
         }
 
         ApplyShimmer(text, color, intensity);
         var top = Mathf.Min(contentFloor, -MinimumDrop) - BelowHintGap;
-        text.rectTransform.anchoredPosition = new Vector2(0f, top);
+        if (float.IsNaN(_appliedTop) || !Mathf.Approximately(_appliedTop, top))
+        {
+            text.rectTransform.anchoredPosition = new Vector2(0f, top);
+            _appliedTop = top;
+        }
+
         _appliedColorHex = colorHex;
         _appliedSize = size;
+        _hidden = false;
         return true;
     }
 
@@ -111,11 +136,13 @@ internal sealed class EmptyMagOverlay
     {
         DestroyText(ref _label);
         ResetAppliedStyle();
+        _hidden = true;
     }
 
     /// <summary>
-    /// Letter colors are painted after the mesh build. A failed paint keeps the whole word on one pulse,
-    /// which is the same color path the other hints already use.
+    /// Letter colors are painted onto the mesh from the last build.
+    /// The mesh is rebuilt when the word or its style changes. Later frames only recolor vertices.
+    /// A failed paint keeps the whole word on one pulse, which is the same color path the other hints already use.
     /// </summary>
     private void ApplyShimmer(TextMeshPro text, Color color, float intensity)
     {
@@ -127,7 +154,11 @@ internal sealed class EmptyMagOverlay
 
         try
         {
-            text.ForceMeshUpdate();
+            if (!_meshReady)
+            {
+                text.ForceMeshUpdate();
+                _meshReady = true;
+            }
             var info = text.textInfo;
             var characters = info != null ? info.characterInfo : null;
             var meshes = info != null ? info.meshInfo : null;
@@ -238,19 +269,15 @@ internal sealed class EmptyMagOverlay
     {
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+            if (!WieldedFrame.TryGetBulletWeapon(out var gun) || !Alive(gun))
                 return false;
 
-            var holder = player!.FPItemHolder;
-            if (!Alive(holder))
+            var clip = gun!.GetCurrentClip();
+            // Rounds still in the weapon, so the magazine the HUD shows is not empty either.
+            if (clip > 0 && gun.m_clip > 0)
                 return false;
 
-            var item = holder!.WieldedItem;
-            if (!Alive(item))
-                return false;
-
-            var gun = item!.TryCast<BulletWeapon>();
-            if (!Alive(gun))
+            if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
                 return false;
 
             if (DisplayedMagazineIsEmpty(item!))
@@ -262,7 +289,7 @@ internal sealed class EmptyMagOverlay
             if (max <= 0)
                 return false;
 
-            return gun.GetCurrentClip() <= 0 && gun.m_clip <= 0;
+            return clip <= 0 && gun.m_clip <= 0;
         }
         catch (Exception ex)
         {
@@ -302,6 +329,10 @@ internal sealed class EmptyMagOverlay
 
     private void Hide()
     {
+        if (_hidden)
+            return;
+
+        _hidden = true;
         ResetAppliedStyle();
         if (!Alive(_label))
             return;
@@ -316,6 +347,9 @@ internal sealed class EmptyMagOverlay
     {
         _appliedColorHex = null;
         _appliedSize = -1;
+        _wordReady = false;
+        _meshReady = false;
+        _appliedTop = float.NaN;
     }
 
     private static void DestroyText(ref TextMeshPro? text)
@@ -350,14 +384,7 @@ internal sealed class EmptyMagOverlay
 
     private static Color ParseColor(string raw, Color fallback)
     {
-        var text = (raw ?? string.Empty).Trim();
-        if (text.Length == 0)
-            return fallback;
-
-        if (!text.StartsWith("#", StringComparison.Ordinal))
-            text = "#" + text;
-
-        return ColorUtility.TryParseHtmlString(text, out var color) ? color : fallback;
+        return HudColor.Parse(raw, fallback);
     }
 
     private static bool Alive(Il2CppObjectBase? obj)

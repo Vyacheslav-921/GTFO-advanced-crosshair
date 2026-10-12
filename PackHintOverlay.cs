@@ -30,6 +30,15 @@ internal sealed class PackHintOverlay
     private int _appliedSize = -1;
     private float _appliedOpacity = -1f;
     private bool _errorLogged;
+    private bool _hidden = true;
+    private IntPtr _itemPtr;
+    private bool _supported;
+    private ResourcePackFirstPerson? _pack;
+    private eResourceContainerSpawnType _packType;
+    private int _uses = int.MinValue;
+    private string _capacity = string.Empty;
+    private Color _color;
+    private string? _styleHex;
 
     public static void Bind(ConfigFile config)
     {
@@ -114,6 +123,7 @@ internal sealed class PackHintOverlay
         _appliedColorHex = colorHex;
         _appliedSize = size;
         _appliedOpacity = opacity;
+        _hidden = false;
         return true;
     }
 
@@ -126,10 +136,20 @@ internal sealed class PackHintOverlay
     {
         DestroyText(ref _capacityText);
         ResetAppliedStyle();
+        _itemPtr = IntPtr.Zero;
+        _pack = null;
+        _supported = false;
+        _styleHex = null;
+        _uses = int.MinValue;
+        _hidden = true;
     }
 
     private void Hide()
     {
+        if (_hidden)
+            return;
+
+        _hidden = true;
         ResetAppliedStyle();
         HideText(_capacityText);
     }
@@ -165,9 +185,8 @@ internal sealed class PackHintOverlay
             text.color = color;
             text.ForceMeshUpdate();
             appliedValue = value;
+            text.rectTransform.anchoredPosition = anchoredPosition;
         }
-
-        text.rectTransform.anchoredPosition = anchoredPosition;
     }
 
     private TextMeshPro? Create(
@@ -237,22 +256,45 @@ internal sealed class PackHintOverlay
 
         try
         {
-            if (!PlayerManager.TryGetLocalPlayerAgent(out var player) || !Alive(player))
+            if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
                 return false;
 
-            var holder = player!.FPItemHolder;
-            if (!Alive(holder))
+            var ptr = item!.Pointer;
+            if (ptr != _itemPtr || (_supported && !Alive(_pack)))
+            {
+                _itemPtr = ptr;
+                _uses = int.MinValue;
+                _styleHex = null;
+                var pack = item.TryCast<ResourcePackFirstPerson>();
+                _pack = Alive(pack) ? pack : null;
+                _supported = _pack != null && PackHex(_pack.m_packType) != null;
+                if (_supported)
+                    _packType = _pack!.m_packType;
+            }
+
+            if (!_supported || !Alive(_pack))
                 return false;
 
-            var item = holder!.WieldedItem;
-            if (!Alive(item))
+            var hex = PackHex(_packType);
+            if (hex == null)
                 return false;
 
-            var pack = item!.TryCast<ResourcePackFirstPerson>();
-            if (!Alive(pack) || !TryGetPackStyle(pack!.m_packType, out color, out colorHex))
-                return false;
+            if (hex != _styleHex)
+            {
+                if (!TryGetPackStyle(_packType, out _color, out _styleHex))
+                    return false;
+            }
 
-            capacity = RemainingUses(pack!).ToString();
+            var uses = RemainingUses(_pack!);
+            if (uses != _uses)
+            {
+                _uses = uses;
+                _capacity = uses.ToString();
+            }
+
+            capacity = _capacity;
+            color = _color;
+            colorHex = _styleHex ?? string.Empty;
             return true;
         }
         catch (Exception ex)
@@ -260,6 +302,18 @@ internal sealed class PackHintOverlay
             LogOnce($"Pack hint update failed: {ex.Message}");
             return false;
         }
+    }
+
+    private static string? PackHex(eResourceContainerSpawnType packType)
+    {
+        return packType switch
+        {
+            eResourceContainerSpawnType.AmmoTool => ToolColorHex.Value,
+            eResourceContainerSpawnType.Health => MedColorHex.Value,
+            eResourceContainerSpawnType.AmmoWeapon => AmmoColorHex.Value,
+            eResourceContainerSpawnType.Disinfection => DisinfColorHex.Value,
+            _ => null
+        };
     }
 
     private static bool TryGetPackStyle(
@@ -384,15 +438,10 @@ internal sealed class PackHintOverlay
 
     private static Color ParseColor(string raw, Color fallback)
     {
-        var text = (raw ?? string.Empty).Trim();
-        if (text.Length == 0)
+        if (string.IsNullOrWhiteSpace(raw))
             return fallback;
 
-        if (!text.StartsWith("#", StringComparison.Ordinal))
-            text = "#" + text;
-
-        var parsed = ColorUtility.TryParseHtmlString(text, out var color) ? color : fallback;
-        return BoostSaturation(parsed);
+        return BoostSaturation(HudColor.Parse(raw, fallback));
     }
 
     private static Color BoostSaturation(Color color)
