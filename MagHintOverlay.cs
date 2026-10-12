@@ -8,9 +8,16 @@ using UnityEngine;
 namespace V921;
 
 /// <summary>
-/// "EMPTY" under the other visor hints while the wielded gun's magazine has no rounds.
+/// Magazine dots beside the crosshair, and "EMPTY" under the other visor hints.
+///
+/// Up to five small circles sit to the right of Outline. A magazine under five rounds
+/// shows one circle per round, drawn a little larger. Spent circles stay visible at a
+/// lower opacity and fill back in from the bottom over a reload.
+/// The stack is hidden on a full magazine and fades toward those opacities as rounds are spent.
+///
+/// "EMPTY" shows while the wielded gun's magazine has no rounds.
 /// A reload that starts from an empty magazine keeps the word up until that reload finishes.
-/// The magazine dots beside the crosshair fade on their own curve. This word does not follow that fade.
+/// The dots fade on their own curve. This word does not follow that fade.
 /// The gleam is the text color, pulsed per letter when the mesh allows it.
 /// </summary>
 internal sealed class MagHintOverlay
@@ -26,7 +33,16 @@ internal sealed class MagHintOverlay
     public static ConfigEntry<string> ColorHex { get; private set; } = null!;
     public static ConfigEntry<float> ShimmerIntensity { get; private set; } = null!;
     public static ConfigEntry<float> FullOpacityAt { get; private set; } = null!;
+    public static ConfigEntry<bool> MagCounterEnabled { get; private set; } = null!;
+    public static ConfigEntry<float> MagCounterSize { get; private set; } = null!;
+    public static ConfigEntry<float> MagCounterOpacity { get; private set; } = null!;
+    public static ConfigEntry<float> MagCounterSpentOpacity { get; private set; } = null!;
 
+    private const int MagPipCount = 5;
+    private const float MagPipGapRatio = 1.2f / 3.2f;
+    private const float MagPipMargin = 4f;
+    private const float MagPipSmallMagScaleStep = 0.12f;
+    private const float MagPipThickness = 16f;
     private const string Word = "EMPTY";
     private const float TmpPointsPerHudUnit = 10f;
     private const float BelowHintGap = 6f;
@@ -55,6 +71,21 @@ internal sealed class MagHintOverlay
     private float _appliedTop = float.NaN;
     private Color _parsedColor;
     private string? _parsedColorHex;
+    private readonly UI_Sprite?[] _magPips = new UI_Sprite?[MagPipCount];
+    private Sprite? _magPipSprite;
+    private float _magDisplayed = -1f;
+    private bool _magReloadActive;
+    private float _magReloadDuration;
+    private IntPtr _magItemPtr;
+    private float _appliedMagDisplayed = -1f;
+    private float _appliedMagAnchorX = float.NaN;
+    private int _appliedMagPipCount = -1;
+    private float _appliedMagPipSize = float.NaN;
+    private float _appliedMagOpacity = -1f;
+    private float _appliedMagSpentOpacity = -1f;
+    private float _appliedMagFade = -1f;
+    private bool _magFadeHidden;
+    private Color _appliedMagColor;
 
     public static void Bind(ConfigFile config)
     {
@@ -94,6 +125,39 @@ internal sealed class MagHintOverlay
             0.7f,
             new ConfigDescription(
                 "Magazine fill where the magazine dots reach Mag counter Opacity. 0.7 reaches it at 70% of the magazine and keeps it there as fewer rounds remain. A full magazine always hides the dots. The last 10 rounds always use that opacity, so a short magazine does not stay faded. EMPTY stays hidden until the magazine is empty.",
+                new AcceptableValueRange<float>(0f, 1f)));
+    }
+
+    public static void BindCounter(ConfigFile config)
+    {
+        MagCounterEnabled = config.Bind(
+            "5 - Mag counter",
+            "Enabled",
+            true,
+            "Show the magazine dots beside the crosshair.");
+
+        MagCounterSize = config.Bind(
+            "5 - Mag counter",
+            "Size",
+            3.2f,
+            new ConfigDescription(
+                "Magazine dot diameter in HUD units. Clips shorter than five rounds scale each dot up slightly.",
+                new AcceptableValueRange<float>(1f, 16f)));
+
+        MagCounterOpacity = config.Bind(
+            "5 - Mag counter",
+            "Opacity",
+            0.8f,
+            new ConfigDescription(
+                "Opacity of rounds still in the magazine once the dots have faded in. 0 is invisible, 1 is solid.",
+                new AcceptableValueRange<float>(0f, 1f)));
+
+        MagCounterSpentOpacity = config.Bind(
+            "5 - Mag counter",
+            "Spent opacity",
+            0.18f,
+            new ConfigDescription(
+                "Opacity of spent rounds once the dots have faded in. 0 is invisible, 1 is solid.",
                 new AcceptableValueRange<float>(0f, 1f)));
     }
 
@@ -189,6 +253,7 @@ internal sealed class MagHintOverlay
     public void Detach()
     {
         DestroyText(ref _label);
+        ClearPips();
         ResetAppliedStyle();
         _emptyWasShown = false;
         _holdForReload = false;
@@ -429,6 +494,222 @@ internal sealed class MagHintOverlay
             _clipZeroSince = Time.unscaledTime;
 
         return Time.unscaledTime - _clipZeroSince >= ClipSettleSeconds;
+    }
+
+    internal void CreatePips(RectTransform parent, int layer, SpriteRenderer? reference, Func<float, Sprite?> circleSprite)
+    {
+        _magPipSprite = circleSprite(MagPipThickness);
+        if (_magPipSprite == null)
+            return;
+
+        for (var i = 0; i < MagPipCount; i++)
+        {
+            var pip = CrosshairOverlay.CreateSprite(parent, _magPipSprite, "Mag Pip " + (i + 1), layer, reference);
+            pip.gameObject.SetActive(false);
+            _magPips[i] = pip;
+        }
+    }
+
+    /// <summary>
+    /// Magazine pips sit just to the right of Outline, top circle first.
+    /// A clip shorter than <see cref="MagPipCount"/> draws one pip per round.
+    /// Fired rounds leave their pip in place at the configured spent opacity.
+    /// A reload fills the stack back toward the clip the gun already holds
+    /// while the reload animation is still playing.
+    /// <see cref="OpacityFactor"/> hides a full magazine and fades the
+    /// stack up to the configured opacities as rounds are spent.
+    /// </summary>
+    internal void ApplyIndicator(bool showCrosshair, float outlineSize, Color? outlineColor)
+    {
+        var hasMag = TryGetMagDisplayed(out var displayed, out var capacity);
+        if (!showCrosshair
+            || !MagCounterEnabled.Value
+            || _magPipSprite == null
+            || !hasMag
+            || outlineColor == null)
+        {
+            _magFadeHidden = false;
+            HideMagPips();
+            return;
+        }
+
+        var fade = OpacityFactor(
+            displayed * capacity,
+            capacity,
+            FullOpacityAt.Value);
+        if (fade <= 0.0001f)
+        {
+            if (!_magFadeHidden)
+            {
+                HideMagPips();
+                _magFadeHidden = true;
+            }
+
+            return;
+        }
+
+        _magFadeHidden = false;
+        var configuredSize = Mathf.Clamp(MagCounterSize.Value, 1f, 16f);
+        var opacity = Mathf.Clamp01(MagCounterOpacity.Value);
+        var spentOpacity = Mathf.Clamp01(MagCounterSpentOpacity.Value);
+        var pipCount = capacity < MagPipCount ? capacity : MagPipCount;
+        var pipSize = configuredSize * (pipCount < MagPipCount
+            ? 1f + (MagPipCount - pipCount) * MagPipSmallMagScaleStep
+            : 1f);
+        var color = outlineColor.Value;
+        var anchorX = outlineSize * 0.5f + MagPipMargin + pipSize * 0.5f;
+        var layoutChanged = float.IsNaN(_appliedMagAnchorX) || !Mathf.Approximately(_appliedMagAnchorX, anchorX);
+        var colorChanged = color != _appliedMagColor;
+        var ratioChanged = !Mathf.Approximately(_appliedMagDisplayed, displayed);
+        var countChanged = pipCount != _appliedMagPipCount;
+        var sizeChanged = float.IsNaN(_appliedMagPipSize) || !Mathf.Approximately(_appliedMagPipSize, pipSize);
+        var opacityChanged = !Mathf.Approximately(_appliedMagOpacity, opacity)
+            || !Mathf.Approximately(_appliedMagSpentOpacity, spentOpacity);
+        var fadeChanged = !Mathf.Approximately(_appliedMagFade, fade);
+        if (!layoutChanged && !colorChanged && !ratioChanged && !countChanged && !sizeChanged && !opacityChanged && !fadeChanged)
+            return;
+
+        _appliedMagAnchorX = anchorX;
+        _appliedMagColor = color;
+        _appliedMagDisplayed = displayed;
+        _appliedMagPipCount = pipCount;
+        _appliedMagPipSize = pipSize;
+        _appliedMagOpacity = opacity;
+        _appliedMagSpentOpacity = spentOpacity;
+        _appliedMagFade = fade;
+
+        var gap = pipSize * MagPipGapRatio;
+        var span = pipCount * pipSize + (pipCount - 1) * gap;
+        var top = span * 0.5f - pipSize * 0.5f;
+        var step = pipSize + gap;
+        var filled = displayed * pipCount;
+        for (var i = 0; i < MagPipCount; i++)
+        {
+            var pip = _magPips[i];
+            if (!Alive(pip))
+                continue;
+
+            if (i >= pipCount)
+            {
+                if (pip!.gameObject.activeSelf)
+                    pip.gameObject.SetActive(false);
+                continue;
+            }
+
+            if (!pip!.gameObject.activeSelf)
+                pip.gameObject.SetActive(true);
+
+            var rect = pip.m_rect;
+            if (rect != null)
+                rect.anchoredPosition = new Vector2(anchorX, top - i * step);
+
+            var presence = Mathf.Clamp01(filled - (pipCount - 1 - i));
+            var pipColor = color;
+            pipColor.a = Mathf.Lerp(spentOpacity, opacity, presence) * fade;
+            CrosshairOverlay.SetSprite(pip, pipColor, pipSize);
+        }
+    }
+
+    internal void ClearPips()
+    {
+        for (var i = 0; i < MagPipCount; i++)
+            _magPips[i] = null;
+
+        _magPipSprite = null;
+        _magDisplayed = -1f;
+        _magReloadActive = false;
+        _magItemPtr = IntPtr.Zero;
+        _appliedMagDisplayed = -1f;
+        _appliedMagAnchorX = float.NaN;
+        _appliedMagPipCount = -1;
+        _appliedMagPipSize = float.NaN;
+        _appliedMagOpacity = -1f;
+        _appliedMagSpentOpacity = -1f;
+        _appliedMagFade = -1f;
+        _magFadeHidden = false;
+    }
+
+    private bool TryGetMagDisplayed(out float displayed, out int capacity)
+    {
+        displayed = 0f;
+        capacity = 0;
+        if (!WieldedFrame.TryGetBulletWeapon(out var gun) || !Alive(gun))
+        {
+            _magReloadActive = false;
+            _magItemPtr = IntPtr.Zero;
+            return false;
+        }
+
+        if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
+        {
+            _magReloadActive = false;
+            _magItemPtr = IntPtr.Zero;
+            return false;
+        }
+
+        // Wielding writes the clip a moment later. A 0 from that gap is not an empty magazine.
+        if (!gun!.m_hasGottenClip && gun.GetCurrentClip() <= 0 && gun.m_clip <= 0 && !gun.ClipIsFull())
+            return false;
+
+        var max = gun.GetMaxClip();
+        if (max <= 0)
+            max = gun.ClipSize;
+        if (max <= 0)
+            return false;
+
+        var clipCount = gun.GetCurrentClip();
+        if (gun.m_clip > clipCount)
+            clipCount = gun.m_clip;
+        var clip = Mathf.Clamp(clipCount, 0, max);
+        var live = gun.ClipIsFull() ? 1f : clip / (float)max;
+        var ptr = item!.Pointer;
+        if (ptr != _magItemPtr)
+        {
+            _magItemPtr = ptr;
+            _magReloadActive = false;
+            _magDisplayed = live;
+        }
+
+        if (item.IsReloading)
+        {
+            if (!_magReloadActive)
+            {
+                _magReloadActive = true;
+                var duration = item.ReloadTime;
+                _magReloadDuration = duration > 0.05f ? duration : 1.2f;
+                if (_magDisplayed < 0f)
+                    _magDisplayed = 0f;
+            }
+
+            var step = Time.deltaTime / Mathf.Max(_magReloadDuration, 0.05f);
+            _magDisplayed = Mathf.MoveTowards(_magDisplayed, live, step);
+        }
+        else
+        {
+            _magReloadActive = false;
+            _magDisplayed = live;
+        }
+
+        displayed = Mathf.Clamp01(_magDisplayed);
+        capacity = max;
+        return true;
+    }
+
+    private void HideMagPips()
+    {
+        _appliedMagDisplayed = -1f;
+        _appliedMagAnchorX = float.NaN;
+        _appliedMagPipCount = -1;
+        _appliedMagPipSize = float.NaN;
+        _appliedMagOpacity = -1f;
+        _appliedMagSpentOpacity = -1f;
+        _appliedMagFade = -1f;
+        for (var i = 0; i < MagPipCount; i++)
+        {
+            var pip = _magPips[i];
+            if (Alive(pip) && pip!.gameObject.activeSelf)
+                pip.gameObject.SetActive(false);
+        }
     }
 
     private void Hide()
