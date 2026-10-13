@@ -34,8 +34,10 @@ internal enum ReticleShape
 /// The crosshair has three parts from the center outward: Center, Outline, and Hint.
 /// Magazine dots beside Outline are <see cref="MagHintOverlay"/>.
 ///
-/// A melee charge draws a configurable shape, then shrinks it
-/// to the crosshair's outer edge as <see cref="MWS_ChargeUp.m_elapsed"/> reaches full damage.
+/// A melee charge shows the hint shape, then shrinks it to the crosshair as
+/// <see cref="MWS_ChargeUp.m_elapsed"/> reaches full damage. After that the shape
+/// changes color and thickens until <see cref="StrikeHideLeadSeconds"/> before the
+/// automatic attack, when it disappears.
 ///
 /// Shown only when all of these are true:
 /// - <see cref="GameStateManager.CurrentStateName"/> is <see cref="eGameStateName.InLevel"/>
@@ -87,6 +89,20 @@ internal class CrosshairOverlay : MonoBehaviour
     private const float MinimumCenterShapeSize = 9f;
     private const float MinimumOutlineShapeSize = 12f;
     private const float HintReadyPadding = 2f;
+
+    /// <summary>
+    /// The hint drops out this long before <c>MeleeAnimationSetDataBlock.AutoAttackTime</c>.
+    /// </summary>
+    private const float StrikeHideLeadSeconds = 0.1f;
+
+    private enum ChargeHintPhase
+    {
+        None,
+        Shrink,
+        Approach,
+        Hidden
+    }
+
     private const float HeldItemCenterClearance = 12f;
     private const string BlockedCenterColorHex = "ffffff";
     private const string BlockedOutlineColorHex = "5eb18e";
@@ -142,9 +158,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private bool _recoilErrorLogged;
     private float _hipLookFov;
     private bool _hasHipLookFov;
-    private bool _hintChargeActive;
     private float _hintLayoutDiameter;
-    private IntPtr _chargeStatePtr;
     private bool _chargeErrorLogged;
     private bool _crosshairShapesActive;
     private bool _autoAttackBlinkActive;
@@ -155,9 +169,9 @@ internal class CrosshairOverlay : MonoBehaviour
     private bool _usageBlockErrorLogged;
     private IntPtr _autoAttackBlinkChargePtr;
     private int _autoAttackBlinkTriggers;
-    private bool _charging;
-    private float _chargeProgress;
-    private float _chargeWarning;
+    private ChargeHintPhase _chargePhase;
+    private float _chargeShrink;
+    private float _chargeApproach;
     private IntPtr _frameChargePtr;
     private int _recoilIntegratedFrame = -1;
     private Vector2 _appliedAnchored;
@@ -322,7 +336,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "4 - Hint",
             "Enabled",
             true,
-            "Show the shrinking melee charge hint.");
+            "Show the melee charge hint. It appears, shrinks to the crosshair, then changes color and thickens, and hides 100 ms before an automatic attack.");
 
         MeleeHintShowAlways = config.Bind(
             "4 - Hint",
@@ -454,13 +468,13 @@ internal class CrosshairOverlay : MonoBehaviour
         var showScopeAmmo = _scopeAmmo.Update(hintParent, hintLayer, scoped);
         if (showCrosshair)
         {
-            _charging = ReadMeleeCharge(out _chargeProgress, out _chargeWarning, out _frameChargePtr);
+            _chargePhase = ReadMeleeCharge(out _chargeShrink, out _chargeApproach, out _frameChargePtr);
             if (!_crosshairShapesActive)
                 InvalidateAppliedStyle();
             ApplyStyle();
         }
         else
-            _charging = false;
+            _chargePhase = ChargeHintPhase.None;
 
         SetCrosshairShapesActive(showCrosshair);
         var outlineRenderer = _outlineShape?.m_sprite;
@@ -471,8 +485,8 @@ internal class CrosshairOverlay : MonoBehaviour
 
         if (showCrosshair)
             ApplyHint();
-        else if (_hintChargeActive)
-            EndHintCharge();
+        else
+            HideHint();
 
         var aiming = hasState && state is eGameStateName.InLevel or eGameStateName.Lobby;
         var showMagHint = _magHint.NeedsPresentation(aiming)
@@ -528,7 +542,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private float AutoAttackBlinkAmount()
     {
-        if (!_charging)
+        if (_chargePhase == ChargeHintPhase.None)
         {
             if (_autoAttackBlinkActive || _autoAttackBlinkTriggers != 0 || _autoAttackBlinkChargePtr != IntPtr.Zero)
             {
@@ -1080,8 +1094,6 @@ internal class CrosshairOverlay : MonoBehaviour
         _appliedHintSprite = null;
         _appliedCenterShape = null;
         _appliedOutlineShape = null;
-        _hintChargeActive = false;
-        _chargeStatePtr = IntPtr.Zero;
         _crosshairShapesActive = false;
         _autoAttackBlinkActive = false;
         _autoAttackBlinkStartedAt = -1f;
@@ -1097,7 +1109,9 @@ internal class CrosshairOverlay : MonoBehaviour
         _steadyHintKey = int.MinValue;
         _steadyHintHex = null;
         _steadyHintOpacity = -1f;
-        _charging = false;
+        _chargePhase = ChargeHintPhase.None;
+        _chargeShrink = 0f;
+        _chargeApproach = 0f;
         _frameChargePtr = IntPtr.Zero;
         _recoil = null;
         _recoilPlayer = IntPtr.Zero;
@@ -1703,24 +1717,19 @@ internal class CrosshairOverlay : MonoBehaviour
     }
 
     /// <summary>
-    /// Charge progress matches <c>MWS_ChargeUp.Update</c>: elapsed / max damage time, clamped to 1.
+    /// Shrink runs until full damage. Color and thickness run from the auto-attack warning
+    /// until the hint hides, just before the strike.
     /// </summary>
     private void ApplyHint()
     {
-        if (!MeleeHintEnabled.Value)
+        if (!MeleeHintEnabled.Value || _chargePhase == ChargeHintPhase.Hidden)
         {
-            if (_hintChargeActive)
-                EndHintCharge();
-            else
-                HideHint();
+            HideHint();
             return;
         }
 
-        if (!_charging)
+        if (_chargePhase == ChargeHintPhase.None)
         {
-            if (_hintChargeActive)
-                EndHintCharge();
-
             if (MeleeHintShowAlways.Value)
                 ShowHintAtOriginalSize();
             else
@@ -1728,39 +1737,26 @@ internal class CrosshairOverlay : MonoBehaviour
             return;
         }
 
-        var progress = _chargeProgress;
-        var autoStrikeWarningProgress = _chargeWarning;
-        var statePtr = _frameChargePtr;
-
-        var chargeJustStarted = !_hintChargeActive || statePtr != _chargeStatePtr;
-        if (chargeJustStarted)
-        {
-            _hintChargeActive = true;
-            _chargeStatePtr = statePtr;
-        }
-
         var crosshairDiameter = CurrentCrosshairDiameter();
-        var targetSize = HintOriginalSize(crosshairDiameter);
-        var readySize = crosshairDiameter + HintReadyPadding;
-        var diameter = chargeJustStarted
-            ? targetSize
-            : Mathf.Lerp(targetSize, readySize, progress);
+        var diameter = Mathf.Lerp(
+            HintOriginalSize(crosshairDiameter),
+            crosshairDiameter + HintReadyPadding,
+            _chargeShrink);
         var color = ConfiguredHintColor();
-        var easedWarning = autoStrikeWarningProgress * autoStrikeWarningProgress;
         var baseThickness = Mathf.Clamp(MeleeHintThickness.Value, 0.5f, 16f);
-        var thicknessIncrease = Mathf.Clamp(MeleeHintAutoAttackThicknessIncrease.Value, 0f, 200f) * 0.01f;
-        ApplyHintThickness(baseThickness * (1f + thicknessIncrease * easedWarning));
-        diameter = HintDiameterWithThicknessSpacing(
-            diameter,
-            baseThickness,
-            _appliedHintThickness);
-        ApplyHintSprite();
-        if (autoStrikeWarningProgress > 0f)
+        var thickness = baseThickness;
+        if (_chargePhase == ChargeHintPhase.Approach)
         {
+            var increase = Mathf.Clamp(MeleeHintAutoAttackThicknessIncrease.Value, 0f, 200f) * 0.01f;
+            thickness *= 1f + increase * _chargeApproach;
             var autoAttackColor = ParseColor(MeleeHintAutoAttackColorHex.Value, Color.white);
             autoAttackColor.a *= Mathf.Clamp01(MeleeHintOpacity.Value);
-            color = Color.Lerp(color, autoAttackColor, easedWarning);
+            color = Color.Lerp(color, autoAttackColor, _chargeApproach);
         }
+
+        ApplyHintThickness(thickness);
+        diameter = HintDiameterWithThicknessSpacing(diameter, baseThickness, _appliedHintThickness);
+        ApplyHintSprite();
         _hintLayoutDiameter = diameter;
         _hintVisible = true;
         _steadyHintKey = int.MinValue;
@@ -1880,55 +1876,67 @@ internal class CrosshairOverlay : MonoBehaviour
         };
     }
 
-    private void EndHintCharge()
+    /// <summary>
+    /// Shrink is elapsed / max damage. The approach runs from <c>AutoAttackWarningTime</c>
+    /// to <see cref="StrikeHideLeadSeconds"/> before <c>AutoAttackTime</c>.
+    /// A charge with no automatic attack stays on the shrink.
+    /// </summary>
+    private ChargeHintPhase ReadMeleeCharge(out float shrink, out float approach, out IntPtr statePtr)
     {
-        _hintChargeActive = false;
-        _chargeStatePtr = IntPtr.Zero;
-        HideHint();
-    }
-
-    private bool ReadMeleeCharge(out float progress, out float autoStrikeWarningProgress, out IntPtr statePtr)
-    {
-        progress = 0f;
-        autoStrikeWarningProgress = 0f;
+        shrink = 0f;
+        approach = 0f;
         statePtr = IntPtr.Zero;
 
         try
         {
             if (!WieldedFrame.TryGetMelee(out var melee) || !Alive(melee))
-                return false;
+                return ChargeHintPhase.None;
 
             var stateName = melee!.CurrentStateName;
             if (stateName != eMeleeWeaponState.AttackChargeUpLeft
                 && stateName != eMeleeWeaponState.AttackChargeUpRight)
-                return false;
+                return ChargeHintPhase.None;
 
             var state = melee.CurrentState;
             if (!Alive(state))
-                return false;
+                return ChargeHintPhase.None;
 
             var chargeUp = state!.TryCast<MWS_ChargeUp>();
             if (!Alive(chargeUp))
-                return false;
+                return ChargeHintPhase.None;
 
             statePtr = chargeUp!.Pointer;
             var elapsed = chargeUp.m_elapsed;
             var maxDamage = chargeUp.m_maxDamageTime;
-            progress = maxDamage > 0.0001f ? Mathf.Clamp01(elapsed / maxDamage) : 1f;
+            shrink = maxDamage > 0.0001f ? Mathf.Clamp01(elapsed / maxDamage) : 1f;
 
             var anim = melee.MeleeAnimationData;
-            if (Alive(anim))
+            if (!Alive(anim))
+                return ChargeHintPhase.Shrink;
+
+            var strikeAt = anim!.AutoAttackTime;
+            if (strikeAt <= maxDamage + 0.0001f)
+                return ChargeHintPhase.Shrink;
+
+            var hideAt = strikeAt - StrikeHideLeadSeconds;
+            if (elapsed >= hideAt)
             {
-                var strikeAt = anim!.AutoAttackTime;
-                if (progress >= 1f && strikeAt > maxDamage)
-                {
-                    var warningDuration = strikeAt - maxDamage;
-                    autoStrikeWarningProgress = Mathf.Clamp01(
-                        (elapsed - maxDamage) / warningDuration);
-                }
+                shrink = 1f;
+                approach = 1f;
+                return ChargeHintPhase.Hidden;
             }
 
-            return true;
+            if (shrink < 1f)
+                return ChargeHintPhase.Shrink;
+
+            var warningAt = anim.AutoAttackWarningTime;
+            var approachStart = warningAt > maxDamage && warningAt < hideAt ? warningAt : maxDamage;
+            if (elapsed < approachStart)
+                return ChargeHintPhase.Shrink;
+
+            var span = hideAt - approachStart;
+            approach = span > 0.0001f ? Mathf.Clamp01((elapsed - approachStart) / span) : 1f;
+            return ChargeHintPhase.Approach;
         }
         catch (Exception ex)
         {
@@ -1938,7 +1946,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 Plugin.Instance.Log.LogWarning($"Hint melee charge update failed: {ex.Message}");
             }
 
-            return false;
+            return ChargeHintPhase.None;
         }
     }
 
