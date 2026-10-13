@@ -12,8 +12,11 @@ namespace V921;
 ///
 /// Up to five small circles sit to the right of Outline. A magazine under five rounds
 /// shows one circle per round, drawn a little larger. Spent circles stay visible at a
-/// lower opacity and fill back in from the bottom over a reload.
-/// The stack is hidden on a full magazine and fades toward those opacities as rounds are spent.
+/// lower opacity. The stack is hidden on a full magazine and fades toward those opacities
+/// as rounds are spent.
+/// A reload leaves the stack as it was. The dots turn white at full opacity and grow
+/// by one short-magazine size step for 80ms slightly before that reload ends, then
+/// return to the configured color, opacity, and size.
 ///
 /// "EMPTY" shows while the wielded gun's magazine has no rounds.
 /// A reload that starts from an empty magazine keeps the word up until that reload finishes.
@@ -43,6 +46,24 @@ internal sealed class MagHintOverlay
     private const float MagPipMargin = 4f;
     private const float MagPipSmallMagScaleStep = 0.12f;
     private const float MagPipThickness = 16f;
+
+    /// <summary>
+    /// Reload-complete dots grow by one short-magazine size step, then return.
+    /// </summary>
+    private const float MagReloadPopScale = 1f + MagPipSmallMagScaleStep;
+
+    /// <summary>How long the reload-complete pop lasts.</summary>
+    private const float MagReloadPopSeconds = 0.08f;
+
+    /// <summary>
+    /// The pop starts this long before the reload's end, so it is not late.
+    /// </summary>
+    private const float MagReloadLeadSeconds = 0.15f;
+
+    /// <summary>
+    /// The clip can be stored before <see cref="ItemEquippable.IsReloading"/> is set.
+    /// </summary>
+    private const float MagReloadArmSeconds = 0.3f;
     private const string Word = "EMPTY";
     private const float TmpPointsPerHudUnit = 10f;
     private const float BelowHintGap = 6f;
@@ -75,7 +96,11 @@ internal sealed class MagHintOverlay
     private Sprite? _magPipSprite;
     private float _magDisplayed = -1f;
     private bool _magReloadActive;
-    private float _magReloadDuration;
+    private bool _magPictureHeld;
+    private bool _magHasPicture;
+    private float _magPopUntil;
+    private float _magReloadStarted;
+    private float _magReloadReleaseAt;
     private IntPtr _magItemPtr;
     private float _appliedMagDisplayed = -1f;
     private float _appliedMagAnchorX = float.NaN;
@@ -84,6 +109,7 @@ internal sealed class MagHintOverlay
     private float _appliedMagOpacity = -1f;
     private float _appliedMagSpentOpacity = -1f;
     private float _appliedMagFade = -1f;
+    private bool _appliedMagPop;
     private bool _magFadeHidden;
     private Color _appliedMagColor;
 
@@ -186,7 +212,7 @@ internal sealed class MagHintOverlay
     }
 
     /// <summary>
-    /// Top of the EMPTY word. The bio-scan circle uses the same line when that word is hidden.
+    /// Top of the EMPTY word.
     /// </summary>
     internal static float AnchorTop(float contentFloor)
     {
@@ -533,8 +559,9 @@ internal sealed class MagHintOverlay
     /// Magazine pips sit just to the right of Outline, top circle first.
     /// A clip shorter than <see cref="MagPipCount"/> draws one pip per round.
     /// Fired rounds leave their pip in place at the configured spent opacity.
-    /// A reload fills the stack back toward the clip the gun already holds
-    /// while the reload animation is still playing.
+    /// A reload leaves that picture in place. When it finishes, every dot is white
+    /// at full opacity and one size step larger for <see cref="MagReloadPopSeconds"/>,
+    /// then the stack uses the configured color, opacity, and size.
     /// <see cref="OpacityFactor"/> hides a full magazine and fades the
     /// stack up to the configured opacities as rounds are spent.
     /// </summary>
@@ -552,10 +579,17 @@ internal sealed class MagHintOverlay
             return;
         }
 
-        var fade = OpacityFactor(
-            displayed * capacity,
-            capacity,
-            FullOpacityAt.Value);
+        // The reload already has a picture. Leave those sprites until it finishes.
+        if (_magPictureHeld && _magHasPicture)
+            return;
+
+        var popping = Time.unscaledTime < _magPopUntil;
+        var fade = popping
+            ? 1f
+            : OpacityFactor(
+                displayed * capacity,
+                capacity,
+                FullOpacityAt.Value);
         if (fade <= 0.0001f)
         {
             if (!_magFadeHidden)
@@ -569,14 +603,16 @@ internal sealed class MagHintOverlay
 
         _magFadeHidden = false;
         var configuredSize = Mathf.Clamp(MagCounterSize.Value, 1f, 16f);
-        var opacity = Mathf.Clamp01(MagCounterOpacity.Value);
-        var spentOpacity = Mathf.Clamp01(MagCounterSpentOpacity.Value);
+        var opacity = popping ? 1f : Mathf.Clamp01(MagCounterOpacity.Value);
+        var spentOpacity = popping ? 1f : Mathf.Clamp01(MagCounterSpentOpacity.Value);
         var pipCount = capacity < MagPipCount ? capacity : MagPipCount;
-        var pipSize = configuredSize * (pipCount < MagPipCount
+        var pipScale = pipCount < MagPipCount
             ? 1f + (MagPipCount - pipCount) * MagPipSmallMagScaleStep
-            : 1f);
-        var color = outlineColor.Value;
-        var anchorX = outlineSize * 0.5f + MagPipMargin + pipSize * 0.5f;
+            : 1f;
+        var layoutSize = configuredSize * pipScale;
+        var pipSize = layoutSize * (popping ? MagReloadPopScale : 1f);
+        var color = popping ? Color.white : outlineColor.Value;
+        var anchorX = outlineSize * 0.5f + MagPipMargin + layoutSize * 0.5f;
         var layoutChanged = float.IsNaN(_appliedMagAnchorX) || !Mathf.Approximately(_appliedMagAnchorX, anchorX);
         var colorChanged = color != _appliedMagColor;
         var ratioChanged = !Mathf.Approximately(_appliedMagDisplayed, displayed);
@@ -585,8 +621,12 @@ internal sealed class MagHintOverlay
         var opacityChanged = !Mathf.Approximately(_appliedMagOpacity, opacity)
             || !Mathf.Approximately(_appliedMagSpentOpacity, spentOpacity);
         var fadeChanged = !Mathf.Approximately(_appliedMagFade, fade);
-        if (!layoutChanged && !colorChanged && !ratioChanged && !countChanged && !sizeChanged && !opacityChanged && !fadeChanged)
+        var popChanged = popping != _appliedMagPop;
+        if (!layoutChanged && !colorChanged && !ratioChanged && !countChanged && !sizeChanged && !opacityChanged && !fadeChanged && !popChanged)
+        {
+            _magHasPicture = true;
             return;
+        }
 
         _appliedMagAnchorX = anchorX;
         _appliedMagColor = color;
@@ -596,11 +636,12 @@ internal sealed class MagHintOverlay
         _appliedMagOpacity = opacity;
         _appliedMagSpentOpacity = spentOpacity;
         _appliedMagFade = fade;
+        _appliedMagPop = popping;
 
-        var gap = pipSize * MagPipGapRatio;
-        var span = pipCount * pipSize + (pipCount - 1) * gap;
-        var top = span * 0.5f - pipSize * 0.5f;
-        var step = pipSize + gap;
+        var gap = layoutSize * MagPipGapRatio;
+        var span = pipCount * layoutSize + (pipCount - 1) * gap;
+        var top = span * 0.5f - layoutSize * 0.5f;
+        var step = layoutSize + gap;
         var filled = displayed * pipCount;
         for (var i = 0; i < MagPipCount; i++)
         {
@@ -627,26 +668,8 @@ internal sealed class MagHintOverlay
             pipColor.a = Mathf.Lerp(spentOpacity, opacity, presence) * fade;
             CrosshairOverlay.SetSprite(pip, pipColor, pipSize);
         }
-    }
 
-    /// <summary>
-    /// Center X and bottom edge of the right-side magazine pip stack. When the pips are
-    /// currently hidden, returns the configured five-pip layout so adjacent indicators
-    /// remain in the same place.
-    /// </summary>
-    internal void GetCounterPlacement(float outlineSize, out float centerX, out float bottom)
-    {
-        var pipSize = _appliedMagPipSize > 0f
-            ? _appliedMagPipSize
-            : Mathf.Clamp(MagCounterSize.Value, 1f, 16f);
-        var pipCount = _appliedMagPipCount > 0 ? _appliedMagPipCount : MagPipCount;
-        centerX = !float.IsNaN(_appliedMagAnchorX)
-            ? _appliedMagAnchorX
-            : outlineSize * 0.5f + MagPipMargin + pipSize * 0.5f;
-
-        var gap = pipSize * MagPipGapRatio;
-        var span = pipCount * pipSize + (pipCount - 1) * gap;
-        bottom = -span * 0.5f;
+        _magHasPicture = true;
     }
 
     internal void ClearPips()
@@ -657,6 +680,11 @@ internal sealed class MagHintOverlay
         _magPipSprite = null;
         _magDisplayed = -1f;
         _magReloadActive = false;
+        _magPictureHeld = false;
+        _magHasPicture = false;
+        _magPopUntil = 0f;
+        _magReloadStarted = 0f;
+        _magReloadReleaseAt = 0f;
         _magItemPtr = IntPtr.Zero;
         _appliedMagDisplayed = -1f;
         _appliedMagAnchorX = float.NaN;
@@ -665,6 +693,7 @@ internal sealed class MagHintOverlay
         _appliedMagOpacity = -1f;
         _appliedMagSpentOpacity = -1f;
         _appliedMagFade = -1f;
+        _appliedMagPop = false;
         _magFadeHidden = false;
     }
 
@@ -674,15 +703,13 @@ internal sealed class MagHintOverlay
         capacity = 0;
         if (!WieldedFrame.TryGetBulletWeapon(out var gun) || !Alive(gun))
         {
-            _magReloadActive = false;
-            _magItemPtr = IntPtr.Zero;
+            ClearMagTrack();
             return false;
         }
 
         if (!WieldedFrame.TryGetItem(out var item) || !Alive(item))
         {
-            _magReloadActive = false;
-            _magItemPtr = IntPtr.Zero;
+            ClearMagTrack();
             return false;
         }
 
@@ -702,30 +729,49 @@ internal sealed class MagHintOverlay
         var clip = Mathf.Clamp(clipCount, 0, max);
         var live = gun.ClipIsFull() ? 1f : clip / (float)max;
         var ptr = item!.Pointer;
+        var reloading = item.IsReloading;
         if (ptr != _magItemPtr)
         {
             _magItemPtr = ptr;
             _magReloadActive = false;
+            _magPictureHeld = false;
+            _magHasPicture = false;
+            _magPopUntil = 0f;
+            _magReloadStarted = 0f;
+            _magReloadReleaseAt = 0f;
             _magDisplayed = live;
         }
-
-        if (item.IsReloading)
+        else if (ReloadHold(reloading, live))
         {
+            // The clip is stored when the reload starts. Keep the fill from the
+            // frame before that, and release the dots slightly before the reload ends.
             if (!_magReloadActive)
             {
                 _magReloadActive = true;
-                var duration = item.ReloadTime;
-                _magReloadDuration = duration > 0.05f ? duration : 1.2f;
+                _magReloadStarted = Time.time;
+                _magPopUntil = 0f;
                 if (_magDisplayed < 0f)
-                    _magDisplayed = 0f;
-            }
+                    _magDisplayed = live;
 
-            var step = Time.deltaTime / Mathf.Max(_magReloadDuration, 0.05f);
-            _magDisplayed = Mathf.MoveTowards(_magDisplayed, live, step);
+                _magPictureHeld = _magHasPicture && !_appliedMagPop;
+                _magReloadReleaseAt = _magReloadStarted + (reloading ? ReloadSpan(item, gun) : MagReloadArmSeconds);
+            }
+            else if (reloading)
+            {
+                var release = _magReloadStarted + ReloadSpan(item, gun);
+                if (release > _magReloadReleaseAt)
+                    _magReloadReleaseAt = release;
+            }
         }
         else
         {
-            _magReloadActive = false;
+            if (_magReloadActive)
+            {
+                _magPopUntil = Time.unscaledTime + MagReloadPopSeconds;
+                _magReloadActive = false;
+                _magPictureHeld = false;
+            }
+
             _magDisplayed = live;
         }
 
@@ -734,8 +780,67 @@ internal sealed class MagHintOverlay
         return true;
     }
 
+    /// <summary>
+    /// Keep the pre-reload fill until slightly before the reload ends.
+    /// A dropped reload flag ends the hold immediately, so the pop is not late.
+    /// </summary>
+    private bool ReloadHold(bool reloading, float live)
+    {
+        if (_magReloadActive && Time.time >= _magReloadStarted + 20f)
+            return false;
+
+        if (_magReloadActive && Time.time >= _magReloadReleaseAt - MagReloadLeadSeconds)
+            return false;
+
+        if (reloading)
+            return true;
+
+        if (_magReloadActive)
+            return false;
+
+        return _magDisplayed >= 0f && live > _magDisplayed + 0.001f;
+    }
+
+    /// <summary>
+    /// Gameplay length of this reload. The shorter of <see cref="ItemEquippable.ReloadTime"/>
+    /// and the authored duration wins, so the pop leads the end instead of trailing the animation.
+    /// </summary>
+    private float ReloadSpan(ItemEquippable item, BulletWeapon gun)
+    {
+        var time = item.ReloadTime;
+        try
+        {
+            var data = gun.m_weaponData;
+            if (Alive(data))
+            {
+                var authored = data!.reloadDuration;
+                if (authored > 0.05f)
+                    time = time > 0.05f ? Mathf.Min(time, authored) : authored;
+            }
+        }
+        catch (Exception ex)
+        {
+            LogOnce($"Mag reload timing fell back to ReloadTime: {ex.Message}");
+        }
+
+        if (time < 0.05f)
+            time = 1.2f;
+        return Mathf.Min(time, 20f);
+    }
+
+    private void ClearMagTrack()
+    {
+        _magReloadActive = false;
+        _magPictureHeld = false;
+        _magPopUntil = 0f;
+        _magReloadStarted = 0f;
+        _magReloadReleaseAt = 0f;
+        _magItemPtr = IntPtr.Zero;
+    }
+
     private void HideMagPips()
     {
+        _magHasPicture = false;
         _appliedMagDisplayed = -1f;
         _appliedMagAnchorX = float.NaN;
         _appliedMagPipCount = -1;
@@ -743,6 +848,7 @@ internal sealed class MagHintOverlay
         _appliedMagOpacity = -1f;
         _appliedMagSpentOpacity = -1f;
         _appliedMagFade = -1f;
+        _appliedMagPop = false;
         for (var i = 0; i < MagPipCount; i++)
         {
             var pip = _magPips[i];

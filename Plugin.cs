@@ -42,7 +42,6 @@ public class Plugin : BasePlugin
         ToolHintOverlay.Bind(Config);
         ScopeAmmoOverlay.Bind(Config);
         MagHintOverlay.Bind(Config);
-        BioScanReadyOverlay.Bind(Config);
         AddComponent<CrosshairOverlay>();
         Log.LogInfo("Crosshair overlay ready (awaits player HUD).");
 

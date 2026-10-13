@@ -107,7 +107,6 @@ internal class CrosshairOverlay : MonoBehaviour
     private readonly ToolHintOverlay _toolHints = new();
     private readonly ScopeAmmoOverlay _scopeAmmo = new();
     private readonly MagHintOverlay _magHint = new();
-    private readonly BioScanReadyOverlay _bioScan = new();
     private Sprite? _centerDotsSprite;
     private Sprite? _centerArcsSprite;
     private Sprite? _centerLinesSprite;
@@ -478,12 +477,7 @@ internal class CrosshairOverlay : MonoBehaviour
         var aiming = hasState && state is eGameStateName.InLevel or eGameStateName.Lobby;
         var showMagHint = _magHint.NeedsPresentation(aiming)
             && _magHint.Update(hintParent, hintLayer, HintFloor());
-        _magHint.GetCounterPlacement(_visibleOutlineSize, out var magCenterX, out var magBottom);
-        var showBioScan = _bioScan.Update(
-            inHudContext || (hasState && state == eGameStateName.Lobby),
-            magCenterX,
-            magBottom);
-        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo || showMagHint || showBioScan;
+        var showRoot = showCrosshair || showPackHint || showItemHint || showToolHint || showScopeAmmo || showMagHint;
 
         if (_root!.activeSelf != showRoot)
         {
@@ -981,7 +975,6 @@ internal class CrosshairOverlay : MonoBehaviour
             _outlineShape = CreateSprite(rect, sprite, "Outline Shape", layer, reference);
             _hintShape = CreateSprite(rect, hintSprite, "Hint Shape", layer, reference);
             _magHint.CreatePips(rect, layer, reference, CircleSprite);
-            _bioScan.Create(rect, layer, reference, CircleSprite(16f));
 
             _appliedHintSprite = hintSprite;
             if (reference != null
@@ -1023,7 +1016,6 @@ internal class CrosshairOverlay : MonoBehaviour
             _hintShape = null;
             _visibleOutlineSize = 0f;
             _magHint.ClearPips();
-            _bioScan.Detach();
             _centerDotsSprite = null;
             _centerArcsSprite = null;
             _centerLinesSprite = null;
@@ -1115,7 +1107,6 @@ internal class CrosshairOverlay : MonoBehaviour
         _toolHints.Detach();
         _scopeAmmo.Detach();
         _magHint.Detach();
-        _bioScan.Detach();
     }
 
     internal static UI_Sprite CreateSprite(Transform parent, Sprite sprite, string name, int layer, SpriteRenderer? reference)

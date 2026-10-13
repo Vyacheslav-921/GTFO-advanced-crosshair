@@ -267,7 +267,7 @@ internal sealed class ToolHintOverlay
             if (percent != _percent)
             {
                 _percent = percent;
-                _capacity = percent + "%";
+                _capacity = percent.ToString();
             }
 
             capacity = _capacity;
