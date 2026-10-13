@@ -12,10 +12,20 @@ namespace V921;
 
 internal enum ReticleShape
 {
+    Dot,
     Dots,
+    Cross,
+    Tee,
+    Diagonal,
+    Triangle,
+    Chevron,
+    Lines,
     Arcs,
     Circle,
-    Lines
+    Square,
+    Diamond,
+    Corners,
+    Count
 }
 
 /// <summary>
@@ -123,18 +133,26 @@ internal class CrosshairOverlay : MonoBehaviour
     private readonly ToolHintOverlay _toolHints = new();
     private readonly ScopeAmmoOverlay _scopeAmmo = new();
     private readonly MagHintOverlay _magHint = new();
-    private Sprite? _centerDotsSprite;
-    private Sprite? _centerArcsSprite;
-    private Sprite? _centerLinesSprite;
-    private Sprite? _centerCircleSprite;
-    private Sprite? _outlineDotsSprite;
-    private Sprite? _outlineArcsSprite;
-    private Sprite? _outlineLinesSprite;
-    private Sprite? _outlineCircleSprite;
-    private Sprite? _hintDotsSprite;
-    private Sprite? _hintArcsSprite;
-    private Sprite? _hintLinesSprite;
-    private Sprite? _hintCircleSprite;
+    private static readonly string[] ShapeNames =
+    {
+        "Dot",
+        "Dots",
+        "Cross",
+        "T",
+        "Diagonal",
+        "Triangle",
+        "Chevron",
+        "Lines",
+        "Arcs",
+        "Circle",
+        "Square",
+        "Diamond",
+        "Corners"
+    };
+
+    private Sprite?[] _centerSprites = Array.Empty<Sprite?>();
+    private Sprite?[] _outlineSprites = Array.Empty<Sprite?>();
+    private Sprite?[] _hintSprites = Array.Empty<Sprite?>();
     private readonly Dictionary<int, Sprite?[]> _shapeCache = new();
     private readonly List<float> _prewarmThicknesses = new();
     private int _prewarmIndex;
@@ -239,8 +257,8 @@ internal class CrosshairOverlay : MonoBehaviour
             "Shape",
             "Arcs",
             new ConfigDescription(
-                "Center shape.",
-                new AcceptableValueList<string>("Dots", "Arcs", "Circle", "Lines")));
+                "Center shape. Dot, Dots, Cross, T, Diagonal, Triangle, Chevron, Lines, Arcs, Circle, Square, Diamond, or Corners.",
+                new AcceptableValueList<string>(ShapeNames)));
 
         CenterColorHex = config.Bind(
             "2 - Center",
@@ -261,7 +279,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Thickness",
             2.8f,
             new ConfigDescription(
-                "Center shape thickness. For Dots, this controls dot size.",
+                "Center shape thickness. For Dot and Dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         CenterOpacity = config.Bind(
@@ -291,8 +309,8 @@ internal class CrosshairOverlay : MonoBehaviour
             "Shape",
             "Arcs",
             new ConfigDescription(
-                "Outline shape.",
-                new AcceptableValueList<string>("Dots", "Arcs", "Circle", "Lines")));
+                "Outline shape. Dot, Dots, Cross, T, Diagonal, Triangle, Chevron, Lines, Arcs, Circle, Square, Diamond, or Corners.",
+                new AcceptableValueList<string>(ShapeNames)));
 
         OutlineColorHex = config.Bind(
             "3 - Outline",
@@ -313,7 +331,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Thickness",
             3.4f,
             new ConfigDescription(
-                "Outline shape thickness. For Dots, this controls dot size.",
+                "Outline shape thickness. For Dot and Dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         OutlineOpacity = config.Bind(
@@ -349,8 +367,8 @@ internal class CrosshairOverlay : MonoBehaviour
             "Shape",
             "Arcs",
             new ConfigDescription(
-                "Melee charge hint shape.",
-                new AcceptableValueList<string>("Dots", "Arcs", "Circle", "Lines")));
+                "Melee charge hint shape. Dot, Dots, Cross, T, Diagonal, Triangle, Chevron, Lines, Arcs, Circle, Square, Diamond, or Corners.",
+                new AcceptableValueList<string>(ShapeNames)));
 
         MeleeHintColorHex = config.Bind(
             "4 - Hint",
@@ -385,7 +403,7 @@ internal class CrosshairOverlay : MonoBehaviour
             "Thickness",
             1.25f,
             new ConfigDescription(
-                "Hint shape thickness. For Dots, this controls dot size.",
+                "Hint shape thickness. For Dot and Dots, this controls dot size.",
                 new AcceptableValueRange<float>(0.5f, 16f)));
 
         MeleeHintOpacity = config.Bind(
@@ -957,21 +975,11 @@ internal class CrosshairOverlay : MonoBehaviour
             var centerThickness = Mathf.Clamp(CenterThickness.Value, 0.5f, 16f);
             var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
             var hintThickness = Mathf.Clamp(MeleeHintThickness.Value, 0.5f, 16f);
-            LoadShapeSet(
-                centerThickness,
-                out _centerDotsSprite,
-                out _centerArcsSprite,
-                out _centerCircleSprite,
-                out _centerLinesSprite);
-            LoadShapeSet(
-                outlineThickness,
-                out _outlineDotsSprite,
-                out _outlineArcsSprite,
-                out _outlineCircleSprite,
-                out _outlineLinesSprite);
+            _centerSprites = LoadShapeSet(centerThickness);
+            _outlineSprites = LoadShapeSet(outlineThickness);
             ApplyHintThickness(hintThickness);
-            var sprite = _centerCircleSprite!;
-            var hintSprite = SelectedHintSprite() ?? _hintCircleSprite!;
+            var sprite = SpriteAt(_centerSprites, ReticleShape.Circle)!;
+            var hintSprite = SelectedHintSprite() ?? SpriteAt(_hintSprites, ReticleShape.Circle)!;
 
             root = new GameObject("GTFO Crosshair");
             var rect = root.AddComponent<RectTransform>();
@@ -1030,18 +1038,7 @@ internal class CrosshairOverlay : MonoBehaviour
             _hintShape = null;
             _visibleOutlineSize = 0f;
             _magHint.ClearPips();
-            _centerDotsSprite = null;
-            _centerArcsSprite = null;
-            _centerLinesSprite = null;
-            _centerCircleSprite = null;
-            _outlineDotsSprite = null;
-            _outlineArcsSprite = null;
-            _outlineLinesSprite = null;
-            _outlineCircleSprite = null;
-            _hintDotsSprite = null;
-            _hintArcsSprite = null;
-            _hintLinesSprite = null;
-            _hintCircleSprite = null;
+            ClearLoadedShapes();
             _appliedHintSprite = null;
             _parentPtr = IntPtr.Zero;
             if (root != null)
@@ -1068,18 +1065,7 @@ internal class CrosshairOverlay : MonoBehaviour
         _centerShape = null;
         _hintShape = null;
         _visibleOutlineSize = 0f;
-        _centerDotsSprite = null;
-        _centerArcsSprite = null;
-        _centerLinesSprite = null;
-        _centerCircleSprite = null;
-        _outlineDotsSprite = null;
-        _outlineArcsSprite = null;
-        _outlineLinesSprite = null;
-        _outlineCircleSprite = null;
-        _hintDotsSprite = null;
-        _hintArcsSprite = null;
-        _hintLinesSprite = null;
-        _hintCircleSprite = null;
+        ClearLoadedShapes();
         _parentPtr = IntPtr.Zero;
         _appliedCenterColorHex = null;
         _appliedCenterSize = -1;
@@ -1230,30 +1216,26 @@ internal class CrosshairOverlay : MonoBehaviour
 
     internal Sprite? CircleSprite(float thickness)
     {
-        LoadShapeSet(thickness, out _, out _, out var circle, out _);
-        return circle;
+        return SpriteAt(LoadShapeSet(thickness), ReticleShape.Circle);
     }
 
-    private void LoadShapeSet(
-        float thickness,
-        out Sprite? dots,
-        out Sprite? arcs,
-        out Sprite? circle,
-        out Sprite? lines)
+    private Sprite?[] LoadShapeSet(float thickness)
     {
         thickness = NormalizedShapeThickness(thickness);
         var key = Mathf.RoundToInt(thickness * 4f);
-        if (!_shapeCache.TryGetValue(key, out var sprites) || sprites == null)
-        {
-            CreateShapeSet(thickness, out dots, out arcs, out circle, out lines);
-            _shapeCache[key] = new[] { dots, arcs, circle, lines };
-            return;
-        }
+        if (_shapeCache.TryGetValue(key, out var sprites) && sprites != null)
+            return sprites;
 
-        dots = sprites[0];
-        arcs = sprites[1];
-        circle = sprites[2];
-        lines = sprites[3];
+        sprites = CreateShapeSet(thickness);
+        _shapeCache[key] = sprites;
+        return sprites;
+    }
+
+    private void ClearLoadedShapes()
+    {
+        _centerSprites = Array.Empty<Sprite?>();
+        _outlineSprites = Array.Empty<Sprite?>();
+        _hintSprites = Array.Empty<Sprite?>();
     }
 
     /// <summary>
@@ -1309,7 +1291,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
             try
             {
-                LoadShapeSet(thickness, out _, out _, out _, out _);
+                LoadShapeSet(thickness);
                 built++;
             }
             catch (Exception ex)
@@ -1345,17 +1327,12 @@ internal class CrosshairOverlay : MonoBehaviour
             UnityEngine.Object.Destroy(texture);
     }
 
-    private static void CreateShapeSet(
-        float thickness,
-        out Sprite? dots,
-        out Sprite? arcs,
-        out Sprite? circle,
-        out Sprite? lines)
+    private static Sprite?[] CreateShapeSet(float thickness)
     {
-        dots = ShapeSprite(ReticleShape.Dots, thickness);
-        arcs = ShapeSprite(ReticleShape.Arcs, thickness);
-        circle = ShapeSprite(ReticleShape.Circle, thickness);
-        lines = ShapeSprite(ReticleShape.Lines, thickness);
+        var sprites = new Sprite?[(int)ReticleShape.Count];
+        for (var i = 0; i < sprites.Length; i++)
+            sprites[i] = ShapeSprite((ReticleShape)i, thickness);
+        return sprites;
     }
 
     private static Sprite ShapeSprite(ReticleShape shape, float configuredThickness)
@@ -1382,33 +1359,17 @@ internal class CrosshairOverlay : MonoBehaviour
                 var outerAlpha = Mathf.Clamp01(distanceInsideEdge + 0.5f);
                 var innerAlpha = Mathf.Clamp01(thickness - distanceInsideEdge);
                 var ringAlpha = outerAlpha * innerAlpha;
-                float alpha;
-
-                switch (shape)
-                {
-                    case ReticleShape.Dots:
-                        var leftDistance = Mathf.Sqrt((dx + dotOffset) * (dx + dotOffset) + dy * dy);
-                        var rightDistance = Mathf.Sqrt((dx - dotOffset) * (dx - dotOffset) + dy * dy);
-                        alpha = Mathf.Clamp01(dotRadius + 0.5f - Mathf.Min(leftDistance, rightDistance));
-                        break;
-                    case ReticleShape.Arcs:
-                        var thicknessProgress = Mathf.Clamp01(
-                            (thickness / resolutionScale - 1.25f) / 3.25f);
-                        var arcCutoff = Mathf.Lerp(0.68f, 0.52f, thicknessProgress);
-                        alpha = ringAlpha * Mathf.Clamp01(Mathf.Abs(dx) - radius * arcCutoff);
-                        break;
-                    case ReticleShape.Lines:
-                        var leftLineDistance = Mathf.Abs(dx + dotOffset);
-                        var rightLineDistance = Mathf.Abs(dx - dotOffset);
-                        var lineAlpha = Mathf.Clamp01(
-                            thickness - Mathf.Min(leftLineDistance, rightLineDistance));
-                        var lineLength = Mathf.Clamp01(radius * 0.72f + 0.5f - Mathf.Abs(dy));
-                        alpha = lineAlpha * lineLength;
-                        break;
-                    default:
-                        alpha = ringAlpha;
-                        break;
-                }
+                var alpha = ShapeCoverage(
+                    shape,
+                    dx,
+                    dy,
+                    distance,
+                    radius,
+                    thickness,
+                    ringAlpha,
+                    dotRadius,
+                    dotOffset,
+                    resolutionScale);
 
                 pixels[row + x] = new Color32(255, 255, 255, AlphaByte(alpha));
             }
@@ -1429,6 +1390,217 @@ internal class CrosshairOverlay : MonoBehaviour
             SpriteMeshType.FullRect);
         sprite.hideFlags = HideFlags.HideAndDontSave;
         return sprite;
+    }
+
+    private static float ShapeCoverage(
+        ReticleShape shape,
+        float dx,
+        float dy,
+        float distance,
+        float radius,
+        float thickness,
+        float ringAlpha,
+        float dotRadius,
+        float dotOffset,
+        float resolutionScale)
+    {
+        if (shape == ReticleShape.Dot)
+            return Mathf.Clamp01(dotRadius + 0.5f - distance);
+
+        float alpha;
+        switch (shape)
+        {
+            case ReticleShape.Dots:
+                var leftDistance = Mathf.Sqrt((dx + dotOffset) * (dx + dotOffset) + dy * dy);
+                var rightDistance = Mathf.Sqrt((dx - dotOffset) * (dx - dotOffset) + dy * dy);
+                alpha = Mathf.Clamp01(dotRadius + 0.5f - Mathf.Min(leftDistance, rightDistance));
+                break;
+            case ReticleShape.Arcs:
+                var thicknessProgress = Mathf.Clamp01((thickness / resolutionScale - 1.25f) / 3.25f);
+                var arcCutoff = Mathf.Lerp(0.68f, 0.52f, thicknessProgress);
+                alpha = ringAlpha * Mathf.Clamp01(Mathf.Abs(dx) - radius * arcCutoff);
+                break;
+            case ReticleShape.Lines:
+                var leftLineDistance = Mathf.Abs(dx + dotOffset);
+                var rightLineDistance = Mathf.Abs(dx - dotOffset);
+                var lineAlpha = Mathf.Clamp01(thickness - Mathf.Min(leftLineDistance, rightLineDistance));
+                var lineLength = Mathf.Clamp01(radius * 0.72f + 0.5f - Mathf.Abs(dy));
+                alpha = lineAlpha * lineLength;
+                break;
+            case ReticleShape.Cross:
+                alpha = AxisMark(dx, dy, radius, thickness, true, true, true, true);
+                break;
+            case ReticleShape.Tee:
+                alpha = AxisMark(dx, dy, radius, thickness, false, true, true, true);
+                break;
+            case ReticleShape.Diagonal:
+                alpha = DiagonalMark(dx, dy, radius, thickness);
+                break;
+            case ReticleShape.Triangle:
+                alpha = TriangleMark(dx, dy, radius, thickness);
+                break;
+            case ReticleShape.Chevron:
+                alpha = ChevronMark(dx, dy, radius, thickness);
+                break;
+            case ReticleShape.Square:
+                alpha = SquareMark(dx, dy, FittedHalfExtent(radius, thickness), thickness);
+                break;
+            case ReticleShape.Diamond:
+                var rotatedX = (dx - dy) * 0.70710678f;
+                var rotatedY = (dx + dy) * 0.70710678f;
+                alpha = SquareMark(rotatedX, rotatedY, FittedHalfExtent(radius, thickness), thickness);
+                break;
+            case ReticleShape.Corners:
+                alpha = CornerMark(dx, dy, radius, thickness);
+                break;
+            default:
+                alpha = ringAlpha;
+                break;
+        }
+
+        return alpha * CenterClear(distance, radius, thickness);
+    }
+
+    /// <summary>
+    /// Radius of the empty middle. Every shape except <see cref="ReticleShape.Dot"/> stays outside it.
+    /// </summary>
+    private static float CenterGap(float radius, float thickness)
+    {
+        return Mathf.Clamp(thickness * 1.25f, radius * 0.22f, radius * 0.45f);
+    }
+
+    private static float CenterClear(float distance, float radius, float thickness)
+    {
+        return Mathf.Clamp01(distance - CenterGap(radius, thickness) + 0.5f);
+    }
+
+    /// <summary>
+    /// Half-extent of a square whose corners sit just inside the reticle, leaving room for the stroke.
+    /// </summary>
+    private static float FittedHalfExtent(float radius, float thickness)
+    {
+        return Mathf.Max(3f, (radius - thickness * 0.45f) * 0.70710678f);
+    }
+
+    private static float Stroke(float distance, float thickness)
+    {
+        return Mathf.Clamp01(thickness - distance);
+    }
+
+    private static float AxisMark(
+        float dx,
+        float dy,
+        float radius,
+        float thickness,
+        bool up,
+        bool down,
+        bool left,
+        bool right)
+    {
+        var reach = radius - thickness * 0.25f;
+        var alpha = 0f;
+        if ((left && dx < 0f) || (right && dx > 0f))
+        {
+            var end = Mathf.Clamp01(reach - Mathf.Abs(dx) + 0.5f);
+            alpha = Mathf.Max(alpha, Stroke(Mathf.Abs(dy), thickness) * end);
+        }
+
+        if ((down && dy < 0f) || (up && dy > 0f))
+        {
+            var end = Mathf.Clamp01(reach - Mathf.Abs(dy) + 0.5f);
+            alpha = Mathf.Max(alpha, Stroke(Mathf.Abs(dx), thickness) * end);
+        }
+
+        return alpha;
+    }
+
+    private static float DiagonalMark(float dx, float dy, float radius, float thickness)
+    {
+        var reach = radius - thickness * 0.25f;
+        var primary = Mathf.Abs(dx - dy) * 0.70710678f;
+        var secondary = Mathf.Abs(dx + dy) * 0.70710678f;
+        var end = Mathf.Clamp01(reach - Mathf.Sqrt(dx * dx + dy * dy) + 0.5f);
+        return Stroke(Mathf.Min(primary, secondary), thickness) * end;
+    }
+
+    private static float TriangleMark(float dx, float dy, float radius, float thickness)
+    {
+        var reach = Mathf.Max(4f, radius - thickness * 0.55f);
+        var topX = 0f;
+        var topY = reach;
+        var rightX = reach * 0.8660254f;
+        var rightY = -reach * 0.5f;
+        var leftX = -rightX;
+        var leftY = rightY;
+        var dist = Mathf.Min(
+            SegmentDistance(dx, dy, topX, topY, rightX, rightY),
+            Mathf.Min(
+                SegmentDistance(dx, dy, rightX, rightY, leftX, leftY),
+                SegmentDistance(dx, dy, leftX, leftY, topX, topY)));
+        return Stroke(dist, thickness);
+    }
+
+    private static float ChevronMark(float dx, float dy, float radius, float thickness)
+    {
+        var reach = Mathf.Max(4f, radius - thickness * 0.45f);
+        var apexX = 0f;
+        var apexY = reach * 0.72f;
+        var footX = reach * 0.78f;
+        var footY = -reach * 0.22f;
+        var dist = Mathf.Min(
+            SegmentDistance(dx, dy, -footX, footY, apexX, apexY),
+            SegmentDistance(dx, dy, apexX, apexY, footX, footY));
+        return Stroke(dist, thickness);
+    }
+
+    private static float SquareMark(float dx, float dy, float halfExtent, float thickness)
+    {
+        var ax = Mathf.Abs(dx);
+        var ay = Mathf.Abs(dy);
+        float dist;
+        if (ax <= halfExtent && ay <= halfExtent)
+            dist = halfExtent - Mathf.Max(ax, ay);
+        else if (ax > halfExtent && ay > halfExtent)
+            dist = Mathf.Sqrt((ax - halfExtent) * (ax - halfExtent) + (ay - halfExtent) * (ay - halfExtent));
+        else if (ax > halfExtent)
+            dist = ax - halfExtent;
+        else
+            dist = ay - halfExtent;
+        return Stroke(dist, thickness);
+    }
+
+    private static float CornerMark(float dx, float dy, float radius, float thickness)
+    {
+        var halfExtent = FittedHalfExtent(radius, thickness);
+        var arm = Mathf.Clamp(halfExtent * 0.48f, thickness * 1.6f, halfExtent * 0.72f);
+        var ax = Mathf.Abs(dx);
+        var ay = Mathf.Abs(dy);
+        var horizontal = Stroke(Mathf.Abs(ay - halfExtent), thickness)
+            * Mathf.Clamp01(ax - (halfExtent - arm) + 0.5f)
+            * Mathf.Clamp01(halfExtent + 0.5f - ax);
+        var vertical = Stroke(Mathf.Abs(ax - halfExtent), thickness)
+            * Mathf.Clamp01(ay - (halfExtent - arm) + 0.5f)
+            * Mathf.Clamp01(halfExtent + 0.5f - ay);
+        return Mathf.Max(horizontal, vertical);
+    }
+
+    private static float SegmentDistance(
+        float px,
+        float py,
+        float ax,
+        float ay,
+        float bx,
+        float by)
+    {
+        var abx = bx - ax;
+        var aby = by - ay;
+        var lengthSquared = abx * abx + aby * aby;
+        var t = lengthSquared > 0.0001f
+            ? Mathf.Clamp01(((px - ax) * abx + (py - ay) * aby) / lengthSquared)
+            : 0f;
+        var qx = ax + abx * t - px;
+        var qy = ay + aby * t - py;
+        return Mathf.Sqrt(qx * qx + qy * qy);
     }
 
     private static Color32[] PixelBuffer()
@@ -1610,24 +1782,14 @@ internal class CrosshairOverlay : MonoBehaviour
         var changed = false;
         if (!Mathf.Approximately(centerThickness, _appliedCenterThickness))
         {
-            LoadShapeSet(
-                centerThickness,
-                out _centerDotsSprite,
-                out _centerArcsSprite,
-                out _centerCircleSprite,
-                out _centerLinesSprite);
+            _centerSprites = LoadShapeSet(centerThickness);
             _appliedCenterThickness = centerThickness;
             changed = true;
         }
 
         if (!Mathf.Approximately(outlineThickness, _appliedOutlineThickness))
         {
-            LoadShapeSet(
-                outlineThickness,
-                out _outlineDotsSprite,
-                out _outlineArcsSprite,
-                out _outlineCircleSprite,
-                out _outlineLinesSprite);
+            _outlineSprites = LoadShapeSet(outlineThickness);
             _appliedOutlineThickness = outlineThickness;
             changed = true;
         }
@@ -1638,15 +1800,11 @@ internal class CrosshairOverlay : MonoBehaviour
     private void ApplyHintThickness(float thickness)
     {
         thickness = NormalizedShapeThickness(thickness);
-        if (Mathf.Approximately(thickness, _appliedHintThickness) && _hintDotsSprite != null)
+        if (Mathf.Approximately(thickness, _appliedHintThickness)
+            && SpriteAt(_hintSprites, ReticleShape.Circle) != null)
             return;
 
-        LoadShapeSet(
-            thickness,
-            out _hintDotsSprite,
-            out _hintArcsSprite,
-            out _hintCircleSprite,
-            out _hintLinesSprite);
+        _hintSprites = LoadShapeSet(thickness);
         _appliedHintThickness = thickness;
     }
 
@@ -1673,24 +1831,20 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private Sprite? SelectedCenterSprite(ReticleShape shape)
     {
-        return shape switch
-        {
-            ReticleShape.Dots => _centerDotsSprite,
-            ReticleShape.Arcs => _centerArcsSprite,
-            ReticleShape.Lines => _centerLinesSprite,
-            _ => _centerCircleSprite
-        };
+        return SpriteAt(_centerSprites, shape) ?? SpriteAt(_centerSprites, ReticleShape.Circle);
     }
 
     private Sprite? SelectedOutlineSprite(ReticleShape shape)
     {
-        return shape switch
-        {
-            ReticleShape.Dots => _outlineDotsSprite,
-            ReticleShape.Arcs => _outlineArcsSprite,
-            ReticleShape.Lines => _outlineLinesSprite,
-            _ => _outlineCircleSprite
-        };
+        return SpriteAt(_outlineSprites, shape) ?? SpriteAt(_outlineSprites, ReticleShape.Circle);
+    }
+
+    private static Sprite? SpriteAt(Sprite?[] sprites, ReticleShape shape)
+    {
+        var index = (int)shape;
+        if (index < 0 || index >= sprites.Length)
+            return null;
+        return sprites[index];
     }
 
     private static void SetRendererSprite(UI_Sprite? ui, Sprite? sprite)
@@ -1855,23 +2009,27 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private Sprite? SelectedHintSprite()
     {
-        return ParseShape(MeleeHintShape.Value) switch
-        {
-            ReticleShape.Dots => _hintDotsSprite,
-            ReticleShape.Arcs => _hintArcsSprite,
-            ReticleShape.Lines => _hintLinesSprite,
-            _ => _hintCircleSprite
-        };
+        return SpriteAt(_hintSprites, ParseShape(MeleeHintShape.Value))
+            ?? SpriteAt(_hintSprites, ReticleShape.Circle);
     }
 
     private static ReticleShape ParseShape(string value)
     {
         return value switch
         {
+            "Dot" or "Single dot" => ReticleShape.Dot,
             "Dots" or "Two dots" => ReticleShape.Dots,
+            "Cross" => ReticleShape.Cross,
+            "T" or "T-shape" or "Tee" => ReticleShape.Tee,
+            "Diagonal" or "Diagonal cross" or "X" => ReticleShape.Diagonal,
+            "Triangle" => ReticleShape.Triangle,
+            "Chevron" => ReticleShape.Chevron,
+            "Lines" => ReticleShape.Lines,
             "Arcs" => ReticleShape.Arcs,
             "Circle" => ReticleShape.Circle,
-            "Lines" => ReticleShape.Lines,
+            "Square" => ReticleShape.Square,
+            "Diamond" => ReticleShape.Diamond,
+            "Corners" => ReticleShape.Corners,
             _ => ReticleShape.Circle
         };
     }
