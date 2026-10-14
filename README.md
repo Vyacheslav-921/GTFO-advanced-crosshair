@@ -1,21 +1,16 @@
 # gtfo-advanced-crosshair
 
-A visor crosshair for GTFO, with melee charge timing, magazine dots, and capacity readouts for packs, items, and tools.
-
-The reticle sits on the visor and sways with it. It is drawn during an expedition while you are in first person.
-
-> While you are running, jumping, falling, reloading, downed, or out of ammo, the center turns white and the outline turns pale green, both at half of their configured opacity.
+A clearly visible, contrast crosshair with additional features: melee charge timing, magazine dots, and capacity readouts for packs, items, and tools.
 
 ## Features
 
-- Center and outline shapes, each with its own color, size, thickness, and opacity.
-- Optional melee charge hint that shrinks onto the crosshair as the swing charges, then changes color and thickens, and hides shortly before the automatic attack.
-- Center and outline thicken during that automatic attack, and the outline shifts toward a blink color.
-- The crosshair follows recoil that stays on the screen while the camera stays still. Shotgun pellets follow the camera, so that crosshair stays centered.
+- Configurable center and outline shapes.
+- Optional melee charge hint that indicates melee charge.
+- The crosshair follows recoil that stays on the screen while the camera stays still.
 - Magazine dots beside the outline. A full magazine hides them. Spent rounds stay visible at a lower opacity, and a magazine under five rounds draws one larger dot per round. The dots flash as a reload completes.
-- `EMPTY` under the other hints while the wielded gun's magazine has no rounds. A reload that starts empty keeps the word up until that reload finishes.
+- `EMPTY` under the other hints while the wielded gun's magazine has no rounds.
 - Remaining pack capacity, consumable uses, and tool capacity (0 to 100) at the visor center.
-- Magazine and reserve ammo below the center while aiming through a magnified scope.
+- Magazine and reserve ammo below the center while aiming through a weapon scope.
 
 Shapes for Center, Outline, and Hint:
 
@@ -37,8 +32,7 @@ By default the reticle is shown for primary, special, and melee weapons, and hid
 
 ## Requirements
 
-- [GTFO](https://store.steampowered.com/app/493520/GTFO/)
-- [BepInEx 6 (Unity IL2CPP)](https://docs.bepinex.dev/) through [r2modman](https://thunderstore.io/c/gtfo/p/ebkr/r2modman/)
+- No special requirements
 
 ## Install
 
