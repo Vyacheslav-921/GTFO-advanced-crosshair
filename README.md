@@ -1,6 +1,6 @@
 # gtfo-advanced-crosshair
 
-A clearly visible, contrast crosshair with additional features: melee charge timing, magazine dots, and capacity readouts for packs, items, and tools.
+Vibe coded with AI, mod adds clearly visible, contrast crosshair with additional features: melee charge timing, magazine indicator, and capacity readouts for packs, items, and tools.
 
 ## Features
 
