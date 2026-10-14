@@ -11,3 +11,6 @@ local.props
 
 # Generated index of BepInEx interop assemblies. See .cursor/rules/gtfo-game-ref.mdc.
 _ref/
+/tools
+/tools/_thickness_check.cs
+/tools/_thickness_check.py
