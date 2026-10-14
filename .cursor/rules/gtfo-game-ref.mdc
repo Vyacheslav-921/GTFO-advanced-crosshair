@@ -1,0 +1,31 @@
+---
+description: Search the local GTFO interop index before parsing game DLLs again
+alwaysApply: true
+---
+
+# GTFO game reference
+
+Game types used by this mod live in the r2modman profile `BepInEx\interop\` folder (`BepInEx` in `local.props`). Those DLLs are IL2CPP wrappers. `_ref/` is their type and member index. Search it before opening an interop DLL, running ILSpy, or writing another scanner.
+
+## Where to look
+
+- `_ref/types.tsv` — `FullName`, base type, assembly, category (`game`, `unity`, `runtime`)
+- `_ref/by-assembly/<Assembly>.dll.txt` — members for that DLL
+- `_ref/manifest.tsv` — profile path, sha256, counts
+- `_ref/HOW.txt` — line format
+
+Game code is mostly `Modules-ASM`, `GameData-ASM`, `Plugins-ASM`, `Addons-ASM`, `GUIX-ASM`, `SNet_ASM`. UI text is `Unity.TextMeshPro` and `UnityEngine.UI`.
+
+Member lines: `TYPE`, `F` field, `P` property, `M` method, `E` event. Example: `rg -n "CrosshairGuiLayer" _ref/types.tsv` then open that assembly file.
+
+## Refresh
+
+`_ref/` is generated and gitignored. From the repo root, when `manifest.tsv` is missing or the game/profile interop changed:
+
+```powershell
+dotnet run --project tools/DumpGameRef -c Release
+```
+
+Matching sha256 values skip the rebuild. `--force` rebuilds anyway. Keep the dump local.
+
+One-off wrapper source goes in `_ref/decompiled/<Type>.cs`. Read that file on the next lookup.

@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Profile BepInEx folder. Compile references only; the mod itself builds into build\. -->
+    <BepInEx>$(AppData)\r2modmanPlus-local\GTFO\profiles\YOUR_PROFILE\BepInEx</BepInEx>
+  </PropertyGroup>
+</Project>
