@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <Import Project="local.props" Condition="Exists('local.props')" />
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
@@ -12,9 +12,7 @@
     <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
   </PropertyGroup>
   <Target Name="EnsureBepInEx" BeforeTargets="ResolveAssemblyReferences">
-    <Error
-      Condition="'$(BepInEx)' == '' OR !Exists('$(BepInEx)\core\BepInEx.Core.dll')"
-      Text="BepInEx reference path is missing. Copy local.props.example to local.props and set BepInEx to that profile's BepInEx folder. Those assemblies are compile references only; the mod builds into build\." />
+    <Error Condition="'$(BepInEx)' == '' OR !Exists('$(BepInEx)\core\BepInEx.Core.dll')" Text="BepInEx reference path is missing. Copy local.props.example to local.props and set BepInEx to that profile's BepInEx folder. Those assemblies are compile references only; the mod builds into build\." />
   </Target>
   <Target Name="PostBuild" BeforeTargets="PostBuildEvent">
     <Delete Files="$(OutputPath)$(AssemblyName).deps.json" />
@@ -32,6 +30,12 @@
     <Folder Include="Patches\" />
     <Compile Remove="tools/**" />
     <Compile Remove="obj/**" />
+    <Compile Remove="tools\**" />
     <Compile Remove="_ref/**" />
+    <Compile Remove="_ref\**" />
+    <EmbeddedResource Remove="tools\**" />
+    <EmbeddedResource Remove="_ref\**" />
+    <None Remove="tools\**" />
+    <None Remove="_ref\**" />
   </ItemGroup>
 </Project>
