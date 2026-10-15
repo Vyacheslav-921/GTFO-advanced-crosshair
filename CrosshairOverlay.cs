@@ -56,10 +56,13 @@ internal enum ReticleShape
 ///
 /// While running, jumping, falling, reloading, downed, or out of ammo, Center and Outline
 /// draw at half of their configured opacity. Center becomes white and Outline becomes pale green.
+/// <see cref="Static"/> keeps Center, Outline, and Hint at their configured look instead:
+/// no usage-state colors, no auto-attack blink, and no melee charge animation.
 /// </summary>
 internal class CrosshairOverlay : MonoBehaviour
 {
     public static ConfigEntry<bool> Enabled { get; private set; } = null!;
+    public static ConfigEntry<bool> Static { get; private set; } = null!;
     public static ConfigEntry<bool> ShowWeapons { get; private set; } = null!;
     public static ConfigEntry<bool> ShowTools { get; private set; } = null!;
     public static ConfigEntry<bool> ShowPacks { get; private set; } = null!;
@@ -215,6 +218,12 @@ internal class CrosshairOverlay : MonoBehaviour
             "Crosshair enabled",
             true,
             "Crosshair enabled.");
+
+        Static = config.Bind(
+            "1 - General",
+            "Static",
+            false,
+            "Keep Center, Outline, and the melee hint at their configured look. Disables usage-state colors, the auto-attack blink, and the melee charge animation.");
 
         ShowWeapons = config.Bind(
             "Show for:",
@@ -486,7 +495,16 @@ internal class CrosshairOverlay : MonoBehaviour
         var showScopeAmmo = _scopeAmmo.Update(hintParent, hintLayer, scoped);
         if (showCrosshair)
         {
-            _chargePhase = ReadMeleeCharge(out _chargeShrink, out _chargeApproach, out _frameChargePtr);
+            if (Static.Value)
+            {
+                _chargePhase = ChargeHintPhase.None;
+                _chargeShrink = 0f;
+                _chargeApproach = 0f;
+                _frameChargePtr = IntPtr.Zero;
+            }
+            else
+                _chargePhase = ReadMeleeCharge(out _chargeShrink, out _chargeApproach, out _frameChargePtr);
+
             if (!_crosshairShapesActive)
                 InvalidateAppliedStyle();
             ApplyStyle();
@@ -541,6 +559,9 @@ internal class CrosshairOverlay : MonoBehaviour
     /// </summary>
     internal void StartAutoAttackBlink()
     {
+        if (Static.Value)
+            return;
+
         ReadMeleeCharge(out _, out _, out var statePtr);
         if (statePtr != _autoAttackBlinkChargePtr)
         {
@@ -1637,8 +1658,8 @@ internal class CrosshairOverlay : MonoBehaviour
         var outlineSpacing = Mathf.Clamp(OutlineSpacing.Value, 0f, 32f);
         var outlineShape = ParseShape(OutlineShape.Value);
         var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
-        var centerClearance = HoldingPackOrItem();
-        var usageBlocked = UsageIsBlocked();
+        var centerClearance = CenterNeedsClearance();
+        var usageBlocked = !Static.Value && UsageIsBlocked();
         var blinkAmount = AutoAttackBlinkAmount();
         var thicknessIncrease = Mathf.Clamp(AutoAttackBlinkThicknessIncrease.Value, 0f, 200f) * 0.01f;
         centerThickness = NormalizedShapeThickness(centerThickness * (1f + thicknessIncrease * blinkAmount));
@@ -1748,6 +1769,11 @@ internal class CrosshairOverlay : MonoBehaviour
 
             return false;
         }
+    }
+
+    private bool CenterNeedsClearance()
+    {
+        return !Static.Value && HoldingPackOrItem();
     }
 
     private static bool HoldingPackOrItem()
@@ -1952,7 +1978,7 @@ internal class CrosshairOverlay : MonoBehaviour
     {
         var visibleCenterSize = VisibleCenterSize(
             Mathf.Clamp(CenterSize.Value, 1, 32),
-            HoldingPackOrItem());
+            CenterNeedsClearance());
         var visibleOutlineSize = VisibleOutlineSize(
             Mathf.Clamp(OutlineSize.Value, 1, 64),
             visibleCenterSize,

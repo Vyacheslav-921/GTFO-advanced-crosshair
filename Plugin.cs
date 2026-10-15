@@ -20,7 +20,7 @@ public class Plugin : BasePlugin
     // Unique id used by BepInEx + Harmony (must stay stable across versions).
     public const string PluginGuid = "gtfo-advanced-crosshair";
     public const string PluginName = "gtfo-advanced-crosshair"; 
-    public const string PluginVersion = "1.0.0";
+    public const string PluginVersion = "1.0.3";
 
     /// <summary>Singleton so patches / MonoBehaviours can log through this plugin instance.</summary>
     public static Plugin Instance { get; private set; } = null!;
