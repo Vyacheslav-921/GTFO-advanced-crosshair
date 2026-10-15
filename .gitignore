@@ -11,3 +11,6 @@ local.props
 tools/
 .cursor/
 _ref/
+/tools
+/tools/_thickness_check.cs
+/tools/_thickness_check.py

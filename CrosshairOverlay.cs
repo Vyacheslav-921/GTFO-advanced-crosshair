@@ -1444,7 +1444,7 @@ internal class CrosshairOverlay : MonoBehaviour
             case ReticleShape.Lines:
                 var leftLineDistance = Mathf.Abs(dx + dotOffset);
                 var rightLineDistance = Mathf.Abs(dx - dotOffset);
-                var lineAlpha = Mathf.Clamp01(thickness - Mathf.Min(leftLineDistance, rightLineDistance));
+                var lineAlpha = Stroke(Mathf.Min(leftLineDistance, rightLineDistance), thickness);
                 var lineLength = Mathf.Clamp01(radius * 0.72f + 0.5f - Mathf.Abs(dy));
                 alpha = lineAlpha * lineLength;
                 break;
@@ -1452,8 +1452,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 alpha = AxisMark(dx, dy, radius, thickness, true, true, true, true);
                 break;
             case ReticleShape.Tee:
-                alpha = AxisMark(dx, dy, radius, thickness, false, true, true, true);
-                break;
+                return TeeMark(dx, dy, radius, thickness);
             case ReticleShape.Diagonal:
                 alpha = DiagonalMark(dx, dy, radius, thickness);
                 break;
@@ -1461,8 +1460,7 @@ internal class CrosshairOverlay : MonoBehaviour
                 alpha = TriangleMark(dx, dy, radius, thickness);
                 break;
             case ReticleShape.Chevron:
-                alpha = ChevronMark(dx, dy, radius, thickness);
-                break;
+                return ChevronMark(dx, dy, radius, thickness);
             case ReticleShape.Square:
                 alpha = SquareMark(dx, dy, FittedHalfExtent(radius, thickness), thickness);
                 break;
@@ -1483,11 +1481,12 @@ internal class CrosshairOverlay : MonoBehaviour
     }
 
     /// <summary>
-    /// Radius of the empty middle. Every shape except <see cref="ReticleShape.Dot"/> stays outside it.
+    /// Radius of the empty middle. Shapes other than Dot, T, and Chevron stay outside it.
+    /// T and Chevron hang below the aim point instead.
     /// </summary>
     private static float CenterGap(float radius, float thickness)
     {
-        return Mathf.Clamp(thickness * 1.25f, radius * 0.22f, radius * 0.45f);
+        return Mathf.Clamp(StrokeRadius(thickness) * 1.25f, radius * 0.22f, radius * 0.45f);
     }
 
     private static float CenterClear(float distance, float radius, float thickness)
@@ -1500,12 +1499,21 @@ internal class CrosshairOverlay : MonoBehaviour
     /// </summary>
     private static float FittedHalfExtent(float radius, float thickness)
     {
-        return Mathf.Max(3f, (radius - thickness * 0.45f) * 0.70710678f);
+        return Mathf.Max(3f, (radius - StrokeRadius(thickness)) * 0.70710678f);
+    }
+
+    /// <summary>
+    /// Distance from a shape's path to where the stroke is half opaque.
+    /// Circle and arcs use this same half-width.
+    /// </summary>
+    private static float StrokeRadius(float thickness)
+    {
+        return Mathf.Max(0f, thickness - 0.5f) * 0.5f;
     }
 
     private static float Stroke(float distance, float thickness)
     {
-        return Mathf.Clamp01(thickness - distance);
+        return Mathf.Clamp01(StrokeRadius(thickness) - distance + 0.5f);
     }
 
     private static float AxisMark(
@@ -1546,7 +1554,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
     private static float TriangleMark(float dx, float dy, float radius, float thickness)
     {
-        var reach = Mathf.Max(4f, radius - thickness * 0.55f);
+        var reach = Mathf.Max(4f, radius - StrokeRadius(thickness));
         var topX = 0f;
         var topY = reach;
         var rightX = reach * 0.8660254f;
@@ -1561,16 +1569,54 @@ internal class CrosshairOverlay : MonoBehaviour
         return Stroke(dist, thickness);
     }
 
+    /// <summary>
+    /// How far below the aim point the top stroke of a T or Chevron sits.
+    /// The stroke fades out just under center, so the tip marks the shot without covering it.
+    /// </summary>
+    private static float AimDrop(float thickness)
+    {
+        return StrokeRadius(thickness) + Mathf.Max(1.5f, thickness * 0.15f);
+    }
+
+    /// <summary>
+    /// T below the aim point: the bar is the top edge, and the stem hangs down.
+    /// </summary>
+    private static float TeeMark(float dx, float dy, float radius, float thickness)
+    {
+        var barY = -AimDrop(thickness);
+        var reach = Mathf.Max(4f, radius - thickness * 0.25f);
+        var stemEnd = -reach;
+        if (stemEnd > barY - 4f)
+            stemEnd = barY - 4f;
+
+        var bar = Stroke(Mathf.Abs(dy - barY), thickness)
+            * Mathf.Clamp01(reach - Mathf.Abs(dx) + 0.5f);
+        var along = barY - dy;
+        var stemLength = barY - stemEnd;
+        var stem = Stroke(Mathf.Abs(dx), thickness)
+            * Mathf.Clamp01(along + 0.5f)
+            * Mathf.Clamp01(stemLength - along + 0.5f);
+        return Mathf.Max(bar, stem);
+    }
+
+    /// <summary>
+    /// Chevron below the aim point. The apex marks the shot; the arms open downward.
+    /// </summary>
     private static float ChevronMark(float dx, float dy, float radius, float thickness)
     {
-        var reach = Mathf.Max(4f, radius - thickness * 0.45f);
-        var apexX = 0f;
-        var apexY = reach * 0.72f;
-        var footX = reach * 0.78f;
-        var footY = -reach * 0.22f;
+        var apexY = -AimDrop(thickness);
+        var footLimit = -(radius - StrokeRadius(thickness));
+        var drop = Mathf.Max(4f, apexY - footLimit);
+        // Same opening as the previous chevron: 0.78 out for every 0.94 down.
+        var footX = drop * (0.78f / 0.94f);
+        var maxFootX = Mathf.Max(3f, radius - StrokeRadius(thickness));
+        if (footX > maxFootX)
+            footX = maxFootX;
+
+        var footY = apexY - drop;
         var dist = Mathf.Min(
-            SegmentDistance(dx, dy, -footX, footY, apexX, apexY),
-            SegmentDistance(dx, dy, apexX, apexY, footX, footY));
+            SegmentDistance(dx, dy, -footX, footY, 0f, apexY),
+            SegmentDistance(dx, dy, 0f, apexY, footX, footY));
         return Stroke(dist, thickness);
     }
 
@@ -1593,7 +1639,7 @@ internal class CrosshairOverlay : MonoBehaviour
     private static float CornerMark(float dx, float dy, float radius, float thickness)
     {
         var halfExtent = FittedHalfExtent(radius, thickness);
-        var arm = Mathf.Clamp(halfExtent * 0.48f, thickness * 1.6f, halfExtent * 0.72f);
+        var arm = Mathf.Clamp(halfExtent * 0.48f, StrokeRadius(thickness) * 1.6f, halfExtent * 0.72f);
         var ax = Mathf.Abs(dx);
         var ay = Mathf.Abs(dy);
         var horizontal = Stroke(Mathf.Abs(ay - halfExtent), thickness)
