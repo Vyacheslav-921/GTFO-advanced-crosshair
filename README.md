@@ -28,6 +28,8 @@ Shapes for Center, Outline, and Hint:
 - Diamond
 - Corners
 
+![Center, outline, and hint shapes](shape-preview.png)
+
 By default the reticle is shown for primary, special, and melee weapons, and hidden for tools, packs, and items. Capacity hints use their own toggles, so they can appear while the reticle for that slot is off.
 
 ## Requirements
@@ -36,8 +38,9 @@ By default the reticle is shown for primary, special, and melee weapons, and hid
 
 ## Install
 
-1. Install this mod with r2modman, or place `gtfo-advanced-crosshair.dll` in the profile's `BepInEx\plugins` folder.
-2. Launch GTFO with **Play Modded**.
+Install [gtfo_advanced_crosshair](https://thunderstore.io/c/gtfo/p/Vyacheslav_921/gtfo_advanced_crosshair/) with r2modman, then launch GTFO with **Play Modded**.
+
+The package places `gtfo-advanced-crosshair.dll` in the profile's `BepInEx\plugins` folder. You can copy that DLL there yourself if you are not using r2modman.
 
 Settings are saved in `BepInEx\config\gtfo-advanced-crosshair.cfg`. Colors are hex `RRGGBB` or `RRGGBBAA`, with no leading `#`. Example: `FF3355`.
 
@@ -47,7 +50,8 @@ Settings are saved in `BepInEx\config\gtfo-advanced-crosshair.cfg`. Colors are h
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Crosshair enabled | true | Turns the crosshair on. |
+| Crosshair enabled | true | Turns the reticle on. |
+| Static | false | Keeps Center, Outline, and the melee hint at their configured look. Disables usage-state colors, the auto-attack blink, and the melee charge animation. |
 
 ### Show for:
 
@@ -188,3 +192,7 @@ dotnet build
 ```
 
 The plugin is written to `build\gtfo-advanced-crosshair.dll`.
+
+## License
+
+This mod is [MIT](LICENSE) licensed. You may use, change, and share it, including in other mods, as long as the license notice stays with the source.
