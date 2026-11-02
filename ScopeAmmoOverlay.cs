@@ -401,10 +401,7 @@ internal sealed class ScopeAmmoOverlay
 
     private static void DestroyText(ref TextMeshPro? text)
     {
-        if (Alive(text))
-            UnityEngine.Object.Destroy(text!.gameObject);
-
-        text = null;
+        HudLifetime.DestroyHudText(ref text);
     }
 
     private void LogOnce(string message)

@@ -996,8 +996,8 @@ internal class CrosshairOverlay : MonoBehaviour
             var centerThickness = Mathf.Clamp(CenterThickness.Value, 0.5f, 16f);
             var outlineThickness = Mathf.Clamp(OutlineThickness.Value, 0.5f, 16f);
             var hintThickness = Mathf.Clamp(MeleeHintThickness.Value, 0.5f, 16f);
-            _centerSprites = LoadShapeSet(centerThickness);
-            _outlineSprites = LoadShapeSet(outlineThickness);
+            _centerSprites = LoadShapeSet(_shapeCache, centerThickness);
+            _outlineSprites = LoadShapeSet(_shapeCache, outlineThickness);
             ApplyHintThickness(hintThickness);
             var sprite = SpriteAt(_centerSprites, ReticleShape.Circle)!;
             var hintSprite = SelectedHintSprite() ?? SpriteAt(_hintSprites, ReticleShape.Circle)!;
@@ -1237,18 +1237,22 @@ internal class CrosshairOverlay : MonoBehaviour
 
     internal Sprite? CircleSprite(float thickness)
     {
-        return SpriteAt(LoadShapeSet(thickness), ReticleShape.Circle);
+        return SpriteAt(LoadShapeSet(_shapeCache, thickness), ReticleShape.Circle);
     }
 
-    private Sprite?[] LoadShapeSet(float thickness)
+    /// <summary>
+    /// Static so Il2CppInterop does not inject it onto the behaviour.
+    /// An instance method that returns <see cref="Sprite"/>[] cannot be exported.
+    /// </summary>
+    private static Sprite?[] LoadShapeSet(Dictionary<int, Sprite?[]> cache, float thickness)
     {
         thickness = NormalizedShapeThickness(thickness);
         var key = Mathf.RoundToInt(thickness * 4f);
-        if (_shapeCache.TryGetValue(key, out var sprites) && sprites != null)
+        if (cache.TryGetValue(key, out var sprites) && sprites != null)
             return sprites;
 
         sprites = CreateShapeSet(thickness);
-        _shapeCache[key] = sprites;
+        cache[key] = sprites;
         return sprites;
     }
 
@@ -1312,7 +1316,7 @@ internal class CrosshairOverlay : MonoBehaviour
 
             try
             {
-                LoadShapeSet(thickness);
+                LoadShapeSet(_shapeCache, thickness);
                 built++;
             }
             catch (Exception ex)
@@ -1854,14 +1858,14 @@ internal class CrosshairOverlay : MonoBehaviour
         var changed = false;
         if (!Mathf.Approximately(centerThickness, _appliedCenterThickness))
         {
-            _centerSprites = LoadShapeSet(centerThickness);
+            _centerSprites = LoadShapeSet(_shapeCache, centerThickness);
             _appliedCenterThickness = centerThickness;
             changed = true;
         }
 
         if (!Mathf.Approximately(outlineThickness, _appliedOutlineThickness))
         {
-            _outlineSprites = LoadShapeSet(outlineThickness);
+            _outlineSprites = LoadShapeSet(_shapeCache, outlineThickness);
             _appliedOutlineThickness = outlineThickness;
             changed = true;
         }
@@ -1876,7 +1880,7 @@ internal class CrosshairOverlay : MonoBehaviour
             && SpriteAt(_hintSprites, ReticleShape.Circle) != null)
             return;
 
-        _hintSprites = LoadShapeSet(thickness);
+        _hintSprites = LoadShapeSet(_shapeCache, thickness);
         _appliedHintThickness = thickness;
     }
 
